@@ -473,15 +473,61 @@
     await seedDefaultsIfEmpty();
   }
 
+  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
   async function save(prop){
-    const keyMap = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
     try{
-      const res = await storageSet(keyMap[prop], JSON.stringify(state[prop]));
+      const res = await storageSet(SAVE_KEY_MAP[prop], JSON.stringify(state[prop]));
       if(!res){ toast('Save failed — try again'); markSaveStatus(false); }
       else{ markSaveStatus(true); }
     }catch(e){
       toast('Save error: could not reach storage');
       markSaveStatus(false);
+    }
+  }
+  // Saves several state properties in ONE cloud round trip instead of one per property.
+  // Use this instead of chaining multiple `await save(x)` calls back to back — those each
+  // wait on their own network trip, which is what made buttons like "Save Job" feel frozen.
+  async function saveMany(props){
+    const payload = {};
+    props.forEach(prop=>{
+      const key = SAVE_KEY_MAP[prop];
+      const value = JSON.stringify(state[prop]);
+      try{ localStorage.setItem(LS_PREFIX+key, value); }catch(e){}
+      payload[key] = value;
+      payload[key+'_updatedAt'] = new Date().toISOString();
+    });
+    if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
+      try{
+        await fsAllDoc().set(payload, {merge:true});
+        markSaveStatus(true);
+        return true;
+      }catch(e){
+        console.error('Firestore save failed, kept in local cache:', e);
+        toast('Cloud save failed — kept locally, will retry next save');
+        markSaveStatus(false);
+        return false;
+      }
+    }
+    if(window.storage){
+      try{
+        await Promise.all(props.map(prop=>window.storage.set(SAVE_KEY_MAP[prop], JSON.stringify(state[prop]), false)));
+      }catch(e){ /* local cache already has it */ }
+    }
+    markSaveStatus(true);
+    return true;
+  }
+  // Disables a button and swaps its label while an async action runs, so a slow save can't
+  // be re-triggered by an impatient second click (this is what caused duplicate job entries).
+  async function withButtonGuard(btn, busyLabel, fn){
+    if(!btn || btn.disabled) return; // already running — ignore the extra click
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = busyLabel;
+    try{
+      await fn();
+    }finally{
+      btn.disabled = false;
+      btn.textContent = original;
     }
   }
   function markSaveStatus(ok){
@@ -1802,7 +1848,8 @@
       renderAll();
     });
 
-    document.getElementById('nj-save').addEventListener('click', async ()=>{
+    document.getElementById('nj-save').addEventListener('click', async (e)=>{
+      await withButtonGuard(e.currentTarget, 'Saving…', async ()=>{
       const customerName = document.getElementById('nj-customer').value.trim() || 'WALKIN';
       const items = draftItems.filter(it=>Number(it.qty)>0 || Number(it.descQty)>0).map(it=>({
         service: (it.service||'').trim() || 'ITEM', category: it.category||'', qty:Number(it.qty)||0, unit:(it.unit||'').trim(), unitPrice:Number(it.unitPrice)||0,
@@ -1844,8 +1891,8 @@
           materialsChanged = true;
         }
       });
-      if(materialsChanged) await save('materials');
-      await save('jobs'); await save('customers'); await save('pricelist');
+      // One cloud round trip instead of three or four sequential ones.
+      await saveMany(materialsChanged ? ['materials','jobs','customers','pricelist'] : ['jobs','customers','pricelist']);
       draftItems = [{service:'',category:'',qty:1,unit:'',unitPrice:0,desc:'',descQty:0,descUnit:'',descUnitPrice:0}];
       draftMaterials = [{name:'',qty:0,unitCost:0,waste:0}];
       toast('Job saved — ' + customerName);
@@ -1854,6 +1901,7 @@
       if(cashV>0 || bankV>0){
         await showReceipt(job, cashV+bankV, {cash:cashV, bank:bankV});
       }
+      });
     });
   }
 
@@ -2131,12 +2179,14 @@
   function attachDeleteHandlers(reRender){
     reRender = reRender || defaultJobsReRender;
     document.querySelectorAll('.job-delete').forEach(btn=>{
-      btn.addEventListener('click', async ()=>{
-        state.jobs = state.jobs.filter(j=>j.id!==btn.dataset.id);
-        recomputeAllCustomers();
-        await save('jobs'); await save('customers');
-        toast('Job removed');
-        reRender();
+      btn.addEventListener('click', async (e)=>{
+        await withButtonGuard(e.currentTarget, 'Removing…', async ()=>{
+          state.jobs = state.jobs.filter(j=>j.id!==btn.dataset.id);
+          recomputeAllCustomers();
+          await saveMany(['jobs','customers']);
+          toast('Job removed');
+          reRender();
+        });
       });
     });
   }
@@ -2195,7 +2245,7 @@
         j.payments = j.payments || [];
         j.payments.push({date: todayISO(), cash, bank, note:'Payment'});
         recomputeAllCustomers();
-        await save('jobs'); await save('customers');
+        await saveMany(['jobs','customers']);
         toast('Payment recorded — ' + naira(cash+bank));
         openPaymentId = null;
         reRender();
