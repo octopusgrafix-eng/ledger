@@ -7,8 +7,9 @@
 <meta name="description" content="Intake, production, delivery and cash record ledger.">
 <meta name="theme-color" content="#F6F1E5">
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
-<link rel="dns-prefetch" href="https://firestore.googleapis.com">
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
   // Your Oktopus Firebase project. This makes your data live in a real cloud database
@@ -198,6 +199,35 @@
   .lg-receipt .r-foot{text-align:center; font-size:11px; color:#666; margin-top:10px;}
   .lg-receipt-actions{display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap;}
   .lg-receipt-actions .lg-btn{flex:1; text-align:center;}
+  /* ---- Sign-in gate ---- */
+  /* The ledger is hidden until Firebase Auth confirms a signed-in user, so the books
+     are never painted for someone who isn't logged in. */
+  #lg-auth{
+    position:fixed; inset:0; z-index:500;
+    background:var(--paper);
+    background-image:linear-gradient(to bottom, transparent 27px, var(--rule) 27px);
+    background-size:100% 28px;
+    display:flex; align-items:center; justify-content:center; padding:24px 16px;
+    overflow-y:auto;
+  }
+  #lg-auth[hidden]{display:none;}
+  .lg-auth-card{
+    background:#FFFDF8; border:1px solid var(--rule); border-radius:4px;
+    box-shadow:0 8px 30px var(--paper-shadow);
+    padding:26px 24px; width:100%; max-width:360px;
+  }
+  .lg-auth-card h1{font-family:var(--font-slab); font-size:23px; letter-spacing:.5px; margin:0;}
+  .lg-auth-card .lg-auth-sub{
+    font-size:11px; color:var(--muted); letter-spacing:1.5px; text-transform:uppercase;
+    margin:3px 0 18px; border-bottom:3px double var(--ink); padding-bottom:12px;
+  }
+  .lg-auth-card .lg-btn{width:100%; margin-top:16px; padding:11px 16px;}
+  .lg-auth-msg{font-size:12px; margin-top:12px; min-height:16px; line-height:1.45;}
+  .lg-auth-msg.err{color:var(--clay);}
+  .lg-auth-msg.ok{color:var(--green);}
+  .lg-auth-foot{font-size:11px; color:var(--muted); margin-top:16px; line-height:1.5;}
+  #lg-signout{margin-left:6px;}
+
   /* ---- Header grouping ---- */
   .lg-header-meta{display:flex;flex-direction:column;align-items:flex-end;gap:2px;}
   .lg-header-actions{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
@@ -240,7 +270,26 @@
 </head>
 <body>
 
-<div id="ledger-root">
+<!-- Shown until Firebase Auth reports a signed-in user. Starts visible so the ledger
+     is never briefly painted to someone who isn't logged in. -->
+<div id="lg-auth">
+  <form class="lg-auth-card" id="lg-auth-form" autocomplete="on">
+    <h1>JOB LEDGER</h1>
+    <div class="lg-auth-sub">Sign in to continue</div>
+    <label for="lg-auth-email">Email</label>
+    <input type="email" id="lg-auth-email" autocomplete="username" required>
+    <label for="lg-auth-pass">Password</label>
+    <input type="password" id="lg-auth-pass" autocomplete="current-password" required>
+    <button class="lg-btn" id="lg-auth-btn" type="submit">Sign In</button>
+    <div class="lg-auth-msg" id="lg-auth-msg">Starting…</div>
+    <div class="lg-auth-foot">
+      You stay signed in on this device until you sign out.
+      Use the same account on your phone and both will show the same ledger.
+    </div>
+  </form>
+</div>
+
+<div id="ledger-root" hidden>
   <div class="lg-shell">
     <div class="lg-header">
       <div>
@@ -255,6 +304,7 @@
           <button class="lg-btn ghost small" id="lg-backup-btn" type="button" title="Download all your data as a file you can keep safe">⬇ Backup</button>
           <button class="lg-btn ghost small" id="lg-restore-btn" type="button" title="Load a backup file back in">⬆ Restore</button>
           <button class="lg-btn danger small" id="lg-clear-btn" type="button" title="Wipe everything and start fresh">🗑 Clear All Data</button>
+          <button class="lg-btn ghost small" id="lg-signout" type="button" title="Sign out of this device">Sign Out</button>
           <input type="file" id="lg-restore-file" accept="application/json" style="display:none;">
         </div>
       </div>
@@ -362,9 +412,15 @@
   }
   clockEl.textContent = new Date().toLocaleDateString('en-NG',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
   function updateStorageModeLabel(){
-    document.getElementById('lg-storage-mode').textContent = window.__FIREBASE_READY__
-      ? '\u2601 Synced to Firebase (permanent)'
-      : (window.storage ? '\u2601 Saved to this Claude conversation' : '\ud83d\udcbe Saved in this browser only');
+    const el = document.getElementById('lg-storage-mode');
+    if(window.__FIREBASE_READY__ && currentUid){
+      const user = window.__firebaseAuth__ && window.__firebaseAuth__.currentUser;
+      el.textContent = '\u2601 Live sync \u2014 ' + ((user && user.email) || 'signed in');
+      el.title = 'Changes appear on your other devices within a second, no refresh needed.';
+    }else{
+      el.textContent = window.storage ? '\u2601 Saved to this Claude conversation' : '\ud83d\udcbe Saved in this browser only';
+      el.title = '';
+    }
   }
   // Firebase loads with `defer` now, so on first paint we don't know yet whether it's ready —
   // show a neutral "connecting" state and update once syncFromCloud() resolves it below.
@@ -384,7 +440,13 @@
   //   loadLocalCache() — synchronous, reads everything from this browser's local cache.
   //   syncFromCloud()  — ONE background Firestore read for the whole ledger (not one read per
   //                       field), which quietly reconciles + re-renders only if something changed.
-  const LS_PREFIX = 'ledgerapp_';
+  // The signed-in user's ledger is stored under their own uid, and the local cache is
+  // namespaced the same way — so two people signing in on the same browser never see
+  // each other's cached books. LEGACY_LS_PREFIX is the pre-login key layout, adopted
+  // once on first sign-in so existing data on this device isn't stranded.
+  const LEGACY_LS_PREFIX = 'ledgerapp_';
+  let currentUid = null;
+  let LS_PREFIX = LEGACY_LS_PREFIX;
   let needsFirebaseMigration = false;
   // Last value we know is safely persisted, per storage key. Lets the periodic
   // safety-net save skip fields that haven't changed instead of rewriting the
@@ -394,8 +456,21 @@
   const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
-    // instead of eleven.
-    return window.__firestoreDb__.collection('ledgerData').doc('appState');
+    // instead of eleven. The document is the signed-in user's uid, which is what the
+    // Firestore security rules match on — nobody else can read or write it.
+    if(!currentUid) throw new Error('Not signed in');
+    return window.__firestoreDb__.collection('ledgerData').doc(currentUid);
+  }
+  // Firestore's SDK can occasionally hang instead of failing outright on a flaky or
+  // restricted connection — this makes sure we never wait forever for it. If it doesn't
+  // finish in time we treat it as failed and fall back to the local cache, same as any
+  // other Firestore error.
+  function withTimeout(promise, ms, label){
+    ms = ms || 8000;
+    return Promise.race([
+      promise,
+      new Promise((_, reject)=> setTimeout(()=> reject(new Error((label||'Firestore request')+' timed out')), ms))
+    ]);
   }
   // The Firebase <script> tags are loaded with `defer` (so they don't block first paint),
   // which means they may not have finished loading yet when we first want to talk to
@@ -406,10 +481,11 @@
       const start = Date.now();
       (function check(){
         if(window.__FIREBASE_READY__){ resolve(true); return; }
-        if(window.firebase && window.firebase.initializeApp){
+        if(window.firebase && window.firebase.initializeApp && window.firebase.auth){
           try{
             window.__firebaseApp__ = firebase.initializeApp(window.__FIREBASE_CONFIG__);
             window.__firestoreDb__ = firebase.firestore();
+            window.__firebaseAuth__ = firebase.auth();
             window.__FIREBASE_READY__ = true;
           }catch(e){
             console.error('Firebase failed to initialize:', e);
@@ -440,7 +516,7 @@
     try{ localStorage.setItem(LS_PREFIX+key, value); }catch(e){}
     if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
       try{
-        await fsAllDoc().set({[key]: value, [key+'_updatedAt']: new Date().toISOString()}, {merge:true});
+        await withTimeout(fsAllDoc().set({[key]: value, [key+'_updatedAt']: new Date().toISOString()}, {merge:true}), 8000, 'Cloud save');
         return {key, value, shared:false};
       }catch(e){
         console.error('Firestore save failed, kept in local cache:', e);
@@ -485,35 +561,94 @@
     }
   }
 
-  // Runs in the background AFTER the local cache has already painted the screen.
-  // One Firestore read for the whole ledger; only re-renders if something actually changed.
-  async function syncFromCloud(){
-    const firebaseReady = await waitForFirebase();
-    if(firebaseReady){
+  // Folds a Firestore snapshot of the whole ledger into state. Returns true if anything
+  // actually differed from what's already on screen.
+  function applyCloudData(data){
+    let changed = false;
+    STORAGE_KEYS.forEach(([prop,key])=>{
+      if(data[key] == null) return;
       try{
-        const snap = await fsAllDoc().get();
-        if(snap.exists){
-          const data = snap.data() || {};
-          let changed = false;
-          STORAGE_KEYS.forEach(([prop,key])=>{
-            if(data[key] == null) return;
-            try{
-              const parsed = prop==='settings'
-                ? Object.assign({}, DEFAULT_SETTINGS, JSON.parse(data[key]))
-                : JSON.parse(data[key]);
-              if(JSON.stringify(state[prop]) !== JSON.stringify(parsed)){
-                state[prop] = parsed;
-                changed = true;
-              }
-              lastPersisted[key] = data[key];
-              try{ localStorage.setItem(LS_PREFIX+key, data[key]); }catch(e){}
-            }catch(e){ /* ignore malformed field, keep local value */ }
-          });
-          if(changed) renderAll();
-        }else{
+        const parsed = prop==='settings'
+          ? Object.assign({}, DEFAULT_SETTINGS, JSON.parse(data[key]))
+          : JSON.parse(data[key]);
+        if(JSON.stringify(state[prop]) !== JSON.stringify(parsed)){
+          state[prop] = parsed;
+          changed = true;
+        }
+        lastPersisted[key] = data[key];
+        try{ localStorage.setItem(LS_PREFIX+key, data[key]); }catch(e){}
+      }catch(e){ /* ignore malformed field, keep local value */ }
+    });
+    return changed;
+  }
+
+  // A remote change arriving mid-edit would wipe whatever is being typed, because every
+  // render replaces #lg-content wholesale. If a field is focused we hold the repaint until
+  // it's given up focus, rather than yanking the form out from under the user.
+  let pendingRemoteRender = false;
+  function renderFromRemote(){
+    const el = document.activeElement;
+    const typing = el && el !== document.body &&
+      /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) &&
+      document.getElementById('ledger-root').contains(el);
+    if(typing){
+      if(!pendingRemoteRender){
+        pendingRemoteRender = true;
+        el.addEventListener('blur', ()=>{
+          pendingRemoteRender = false;
+          renderAll();
+          toast('Updated from your other device');
+        }, {once:true});
+      }
+      return;
+    }
+    renderAll();
+    toast('Updated from your other device');
+  }
+
+  // Live subscription: replaces the old one-shot get(). Firestore pushes the whole
+  // document whenever it changes anywhere, so a save on the desktop lands on the phone
+  // in about a second without a refresh. Local echoes of our own writes are skipped.
+  let unsubscribeCloud = null;
+  function subscribeToCloud(){
+    if(unsubscribeCloud){ unsubscribeCloud(); unsubscribeCloud = null; }
+    let first = true;
+    unsubscribeCloud = fsAllDoc().onSnapshot(
+      {includeMetadataChanges:false},
+      (snap)=>{
+        // Our own un-acknowledged write bouncing back — state already reflects it.
+        if(snap.metadata.hasPendingWrites) return;
+        if(!snap.exists){
           const hasLocalData = STORAGE_KEYS.some(([prop])=> prop!=='settings' && Array.isArray(state[prop]) && state[prop].length);
           if(hasLocalData) needsFirebaseMigration = true;
+          if(first){ first = false; onCloudFirstLoad(); }
+          return;
         }
+        const changed = applyCloudData(snap.data() || {});
+        if(first){
+          first = false;
+          if(changed) renderAll();
+          onCloudFirstLoad();
+        }else if(changed){
+          renderFromRemote();
+        }
+      },
+      (err)=>{
+        console.error('Live sync dropped, staying on local cache:', err);
+        document.getElementById('lg-storage-mode').textContent = '⚠ Offline — saved on this device';
+      }
+    );
+  }
+  let cloudFirstLoadDone = null;
+  function onCloudFirstLoad(){ if(cloudFirstLoadDone){ cloudFirstLoadDone(); cloudFirstLoadDone = null; } }
+
+  // Waits for the live subscription's first payload so boot can seed defaults / migrate
+  // only once the real cloud state is known.
+  async function syncFromCloud(){
+    const firebaseReady = await waitForFirebase();
+    if(firebaseReady && currentUid){
+      try{
+        await withTimeout(new Promise(res=>{ cloudFirstLoadDone = res; subscribeToCloud(); }), 8000, 'Cloud sync');
       }catch(e){
         console.error('Firestore sync failed, staying on local cache:', e);
       }
@@ -533,19 +668,66 @@
     await seedDefaultsIfEmpty();
   }
 
+  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
   async function save(prop){
-    const keyMap = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
     try{
       const value = JSON.stringify(state[prop]);
-      const res = await storageSet(keyMap[prop], value);
+      const res = await storageSet(SAVE_KEY_MAP[prop], value);
       if(!res){ toast('Save failed — try again'); markSaveStatus(false); }
-      else{ lastPersisted[keyMap[prop]] = value; markSaveStatus(true); }
+      else{ lastPersisted[SAVE_KEY_MAP[prop]] = value; markSaveStatus(true); }
     }catch(e){
       toast('Save error: could not reach storage');
       markSaveStatus(false);
     }
   }
-  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
+  // Saves several state properties in ONE cloud round trip instead of one per property.
+  // Use this instead of chaining multiple `await save(x)` calls back to back — those each
+  // wait on their own network trip, which is what made buttons like "Save Job" feel frozen.
+  async function saveMany(props){
+    const payload = {};
+    props.forEach(prop=>{
+      const key = SAVE_KEY_MAP[prop];
+      const value = JSON.stringify(state[prop]);
+      try{ localStorage.setItem(LS_PREFIX+key, value); }catch(e){}
+      payload[key] = value;
+      payload[key+'_updatedAt'] = new Date().toISOString();
+    });
+    if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
+      try{
+        await withTimeout(fsAllDoc().set(payload, {merge:true}), 8000, 'Cloud save');
+        props.forEach(prop=>{ lastPersisted[SAVE_KEY_MAP[prop]] = payload[SAVE_KEY_MAP[prop]]; });
+        markSaveStatus(true);
+        return true;
+      }catch(e){
+        console.error('Firestore save failed, kept in local cache:', e);
+        toast('Cloud save failed — kept locally, will retry next save');
+        markSaveStatus(false);
+        return false;
+      }
+    }
+    if(window.storage){
+      try{
+        await Promise.all(props.map(prop=>window.storage.set(SAVE_KEY_MAP[prop], JSON.stringify(state[prop]), false)));
+      }catch(e){ /* local cache already has it */ }
+    }
+    props.forEach(prop=>{ lastPersisted[SAVE_KEY_MAP[prop]] = payload[SAVE_KEY_MAP[prop]]; });
+    markSaveStatus(true);
+    return true;
+  }
+  // Disables a button and swaps its label while an async action runs, so a slow save can't
+  // be re-triggered by an impatient second click (this is what caused duplicate job entries).
+  async function withButtonGuard(btn, busyLabel, fn){
+    if(!btn || btn.disabled) return; // already running — ignore the extra click
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = busyLabel;
+    try{
+      await fn();
+    }finally{
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
   function markSaveStatus(ok){
     const el = document.getElementById('lg-last-saved');
     if(!el) return;
@@ -558,48 +740,16 @@
   // hiccup) so you're never more than 5 minutes from a confirmed-good save.
   // Previously this fanned out into 11 separate save() calls, i.e. 11 network writes to the
   // SAME Firestore document every 5 minutes regardless of whether anything had changed.
-  // Now: stringify once, skip fields that are already persisted, and send whatever is left
-  // as ONE merge write. An idle ledger costs zero network traffic.
+  // Now: stringify once, skip fields already known to be persisted, and hand whatever is
+  // left to saveMany() as ONE merge write. An idle ledger costs zero network traffic.
   async function autoSaveAll(force){
-    const changed = {};
-    let changedCount = 0;
-    Object.keys(SAVE_KEY_MAP).forEach(prop=>{
-      const key = SAVE_KEY_MAP[prop];
-      let value;
-      try{ value = JSON.stringify(state[prop]); }catch(e){ return; }
-      if(!force && lastPersisted[key] === value) return;
-      changed[key] = value;
-      changedCount++;
+    const dirty = Object.keys(SAVE_KEY_MAP).filter(prop=>{
+      if(force) return true;
+      try{ return lastPersisted[SAVE_KEY_MAP[prop]] !== JSON.stringify(state[prop]); }
+      catch(e){ return false; }
     });
-    if(!changedCount) return;
-
-    // Local cache first — cheap, and survives the network call failing.
-    Object.keys(changed).forEach(key=>{
-      try{ localStorage.setItem(LS_PREFIX+key, changed[key]); }catch(e){}
-    });
-
-    if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
-      const payload = {};
-      const stamp = new Date().toISOString();
-      Object.keys(changed).forEach(key=>{ payload[key] = changed[key]; payload[key+'_updatedAt'] = stamp; });
-      try{
-        await fsAllDoc().set(payload, {merge:true});
-        Object.keys(changed).forEach(key=>{ lastPersisted[key] = changed[key]; });
-        markSaveStatus(true);
-      }catch(e){
-        console.error('Batched save failed, kept in local cache:', e);
-        markSaveStatus(false);
-      }
-      return;
-    }
-    if(window.storage){
-      await Promise.all(Object.keys(changed).map(async key=>{
-        try{ await window.storage.set(key, changed[key], false); lastPersisted[key] = changed[key]; }catch(e){}
-      }));
-    }else{
-      Object.keys(changed).forEach(key=>{ lastPersisted[key] = changed[key]; });
-    }
-    markSaveStatus(true);
+    if(!dirty.length) return;
+    await saveMany(dirty);
   }
 
   // ---------- backup / restore ----------
@@ -695,7 +845,7 @@
     state.quotes = [];
     state.recurring = [];
     state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: ''});
-    await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings'].map(save));
+    await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings']);
     toast('All data cleared — starting fresh');
     state.tab = 'dashboard';
     renderAll();
@@ -1914,7 +2064,8 @@
       renderAll();
     });
 
-    document.getElementById('nj-save').addEventListener('click', async ()=>{
+    document.getElementById('nj-save').addEventListener('click', async (e)=>{
+      await withButtonGuard(e.currentTarget, 'Saving…', async ()=>{
       const customerName = document.getElementById('nj-customer').value.trim() || 'WALKIN';
       const items = draftItems.filter(it=>Number(it.qty)>0 || Number(it.descQty)>0).map(it=>({
         service: (it.service||'').trim() || 'ITEM', category: it.category||'', qty:Number(it.qty)||0, unit:(it.unit||'').trim(), unitPrice:Number(it.unitPrice)||0,
@@ -1956,8 +2107,8 @@
           materialsChanged = true;
         }
       });
-      if(materialsChanged) await save('materials');
-      await save('jobs'); await save('customers'); await save('pricelist');
+      // One cloud round trip instead of three or four sequential ones.
+      await saveMany(materialsChanged ? ['materials','jobs','customers','pricelist'] : ['jobs','customers','pricelist']);
       draftItems = [{service:'',category:'',qty:1,unit:'',unitPrice:0,desc:'',descQty:0,descUnit:'',descUnitPrice:0}];
       draftMaterials = [{name:'',qty:0,unitCost:0,waste:0}];
       toast('Job saved — ' + customerName);
@@ -1966,6 +2117,7 @@
       if(cashV>0 || bankV>0){
         await showReceipt(job, cashV+bankV, {cash:cashV, bank:bankV});
       }
+      });
     });
   }
 
@@ -2264,12 +2416,14 @@
   function attachDeleteHandlers(reRender){
     reRender = reRender || defaultJobsReRender;
     document.querySelectorAll('.job-delete').forEach(btn=>{
-      btn.addEventListener('click', async ()=>{
-        state.jobs = state.jobs.filter(j=>j.id!==btn.dataset.id);
-        recomputeAllCustomers();
-        await save('jobs'); await save('customers');
-        toast('Job removed');
-        reRender();
+      btn.addEventListener('click', async (e)=>{
+        await withButtonGuard(e.currentTarget, 'Removing…', async ()=>{
+          state.jobs = state.jobs.filter(j=>j.id!==btn.dataset.id);
+          recomputeAllCustomers();
+          await saveMany(['jobs','customers']);
+          toast('Job removed');
+          reRender();
+        });
       });
     });
   }
@@ -2328,7 +2482,7 @@
         j.payments = j.payments || [];
         j.payments.push({date: todayISO(), cash, bank, note:'Payment'});
         recomputeAllCustomers();
-        await save('jobs'); await save('customers');
+        await saveMany(['jobs','customers']);
         toast('Payment recorded — ' + naira(cash+bank));
         openPaymentId = null;
         reRender();
@@ -3809,8 +3963,94 @@
     });
   }
 
+  // ---------- auth ----------
+  // The ledger is gated behind a Firebase Auth sign-in. Accounts are created by the owner
+  // in the Firebase console (Authentication → Users), not here — there is deliberately no
+  // public sign-up form, so a stranger can't provision themselves an account on this site.
+  const authEl = document.getElementById('lg-auth');
+  const authForm = document.getElementById('lg-auth-form');
+  const authMsgEl = document.getElementById('lg-auth-msg');
+  const authBtn = document.getElementById('lg-auth-btn');
+
+  function authMsg(text, kind){
+    authMsgEl.textContent = text || '';
+    authMsgEl.className = 'lg-auth-msg' + (kind ? ' '+kind : '');
+  }
+  // Firebase's raw error codes ("auth/invalid-credential") aren't much use to a person
+  // trying to get into their own books.
+  function friendlyAuthError(code){
+    switch(code){
+      case 'auth/invalid-email':        return 'That doesn’t look like a valid email address.';
+      case 'auth/user-disabled':        return 'This account has been disabled.';
+      case 'auth/user-not-found':
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential':   return 'Email or password is not correct.';
+      case 'auth/too-many-requests':    return 'Too many attempts. Wait a minute and try again.';
+      case 'auth/network-request-failed': return 'No connection. Check your internet and try again.';
+      case 'auth/operation-not-allowed': return 'Email/password sign-in is not enabled for this project yet.';
+      default: return 'Could not sign in. Please try again.';
+    }
+  }
+
+  // Points the local cache at this user's own namespace. On a device that used the app
+  // before sign-in existed, the old un-namespaced keys are adopted once so existing
+  // books on that device carry over instead of appearing to vanish.
+  function setLedgerScope(uid){
+    currentUid = uid;
+    const scoped = 'ledgerapp_' + uid + '_';
+    try{
+      const alreadyScoped = STORAGE_KEYS.some(([,key])=> localStorage.getItem(scoped+key) != null);
+      const hasLegacy = STORAGE_KEYS.some(([,key])=> localStorage.getItem(LEGACY_LS_PREFIX+key) != null);
+      if(!alreadyScoped && hasLegacy){
+        STORAGE_KEYS.forEach(([,key])=>{
+          const v = localStorage.getItem(LEGACY_LS_PREFIX+key);
+          if(v != null) localStorage.setItem(scoped+key, v);
+        });
+      }
+    }catch(e){ /* private mode / quota — fall through, cloud is still the source of truth */ }
+    LS_PREFIX = scoped;
+  }
+
+  authForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email = document.getElementById('lg-auth-email').value.trim();
+    const pass  = document.getElementById('lg-auth-pass').value;
+    if(!email || !pass){ authMsg('Enter your email and password.', 'err'); return; }
+    authBtn.disabled = true;
+    authBtn.textContent = 'Signing in…';
+    authMsg('');
+    try{
+      const ready = await waitForFirebase(8000);
+      if(!ready) throw {code:'auth/network-request-failed'};
+      // LOCAL persistence: stays signed in on this device across restarts.
+      await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+      await firebase.auth().signInWithEmailAndPassword(email, pass);
+      // onAuthStateChanged takes it from here.
+    }catch(err){
+      console.error('Sign-in failed:', err);
+      authMsg(friendlyAuthError(err && err.code), 'err');
+      authBtn.disabled = false;
+      authBtn.textContent = 'Sign In';
+    }
+  });
+
+  document.getElementById('lg-signout').addEventListener('click', async ()=>{
+    if(!confirm('Sign out of this device? Your ledger stays safe in the cloud.')) return;
+    try{
+      if(unsubscribeCloud){ unsubscribeCloud(); unsubscribeCloud = null; }
+      await firebase.auth().signOut();
+      location.reload();
+    }catch(e){ toast('Could not sign out — try again'); }
+  });
+
+  let ledgerStarted = false;
+
   // ---------- boot ----------
-  (async function init(){
+  async function startLedger(){
+    if(ledgerStarted) return;
+    ledgerStarted = true;
+    authEl.hidden = true;
+    document.getElementById('ledger-root').hidden = false;
     renderTabs();
     document.getElementById('lg-backup-btn').addEventListener('click', downloadBackup);
     document.getElementById('lg-restore-btn').addEventListener('click', ()=>{
@@ -3850,6 +4090,30 @@
     }
     markSaveStatus(true);
     setInterval(()=>autoSaveAll(), 5*60*1000);
+  }
+
+  // Entry point. Nothing is read or painted until Firebase tells us who (if anyone) is
+  // signed in on this device.
+  (async function init(){
+    const ready = await waitForFirebase(8000);
+    if(!ready){
+      authMsg('Cannot reach the sign-in service. Check your internet connection and reload.', 'err');
+      authBtn.disabled = true;
+      return;
+    }
+    firebase.auth().onAuthStateChanged(async (user)=>{
+      if(user){
+        setLedgerScope(user.uid);
+        await startLedger();
+      }else{
+        // Signed out (or never signed in) — show the gate, keep the books hidden.
+        authEl.hidden = false;
+        document.getElementById('ledger-root').hidden = true;
+        authBtn.disabled = false;
+        authBtn.textContent = 'Sign In';
+        authMsg('');
+      }
+    });
   })();
 })();
 </script>
