@@ -1,3 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Ledger — Oktopus</title>
+<meta name="description" content="Intake, production, delivery and cash record ledger.">
+<meta name="theme-color" content="#F6F1E5">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="dns-prefetch" href="https://firestore.googleapis.com">
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
@@ -34,13 +44,22 @@
     --paper-shadow: rgba(27,42,61,0.08);
   }
   *{box-sizing:border-box;}
+  html{height:100%;-webkit-text-size-adjust:100%;}
+  body{
+    margin:0;min-height:100%;
+    background:var(--paper);
+    overflow-x:hidden;
+  }
   #ledger-root{
     background:var(--paper);
-    background-image:
-      repeating-linear-gradient(transparent, transparent 27px, var(--rule) 28px);
+    /* A 28px repeating tile the compositor can cheaply repeat, instead of one
+       repeating-linear-gradient stretched over the entire document height. */
+    background-image:linear-gradient(to bottom, transparent 27px, var(--rule) 27px);
+    background-size:100% 28px;
+    background-repeat:repeat-y;
     color:var(--ink);
     font-family:var(--font-mono);
-    min-height:100%;
+    min-height:100vh;
     padding:0;
     position:relative;
   }
@@ -179,6 +198,37 @@
   .lg-receipt .r-foot{text-align:center; font-size:11px; color:#666; margin-top:10px;}
   .lg-receipt-actions{display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap;}
   .lg-receipt-actions .lg-btn{flex:1; text-align:center;}
+  /* ---- Header grouping ---- */
+  .lg-header-meta{display:flex;flex-direction:column;align-items:flex-end;gap:2px;}
+  .lg-header-actions{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
+
+  /* ---- Responsive ----
+     These only ever take effect because the document now declares
+     <meta name="viewport" content="width=device-width">. Without it every phone
+     reports a 980px viewport and none of these queries match. */
+  @media(max-width:760px){
+    .lg-shell{padding:14px 12px 48px;}
+    .lg-header{align-items:flex-start;}
+    .lg-header-meta{align-items:flex-start;width:100%;}
+    .lg-header-actions{justify-content:flex-start;}
+    .lg-date{text-align:left;}
+    .lg-header .lg-title{font-size:21px;}
+    /* Wide data tables scroll inside their own card instead of stretching the page. */
+    .lg-card{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+    .lg-card table{min-width:560px;}
+    /* 16px prevents iOS Safari from auto-zooming when a field is focused. */
+    input,select,textarea{font-size:16px;}
+  }
+  @media(max-width:560px){
+    .lg-grid.cols-4,.lg-grid.cols-3,.lg-grid.cols-2{grid-template-columns:1fr;}
+    .kanban{grid-template-columns:1fr;}
+    .item-row,.item-desc-row,.material-row{grid-template-columns:1fr;}
+    .lg-tab{font-size:13px;padding:7px 11px;}
+    .lg-btn{padding:10px 14px;}
+    .lg-row-actions .lg-btn{flex:1 1 auto;}
+    .toast{left:12px;right:12px;bottom:12px;text-align:center;}
+  }
+
   @media print{
     body *{visibility:hidden;}
     .lg-receipt, .lg-receipt *{visibility:visible;}
@@ -187,6 +237,8 @@
     .lg-overlay{position:static; background:none; padding:0;}
   }
 </style>
+</head>
+<body>
 
 <div id="ledger-root">
   <div class="lg-shell">
@@ -195,14 +247,16 @@
         <div class="lg-title">JOB LEDGER</div>
         <div class="lg-sub">Intake &middot; Production &middot; Delivery &middot; Cash Record</div>
       </div>
-      <div class="lg-date" id="lg-clock"></div>
-      <div class="lg-date" id="lg-storage-mode" style="font-size:10.5px;opacity:.85;margin-top:2px;"></div>
-      <div class="lg-date" id="lg-last-saved" style="font-size:10.5px;opacity:.85;margin-top:2px;"></div>
-      <div style="margin-top:6px;display:flex;gap:6px;">
-        <button class="lg-btn ghost small" id="lg-backup-btn" type="button" title="Download all your data as a file you can keep safe">⬇ Backup</button>
-        <button class="lg-btn ghost small" id="lg-restore-btn" type="button" title="Load a backup file back in">⬆ Restore</button>
-        <button class="lg-btn danger small" id="lg-clear-btn" type="button" title="Wipe everything and start fresh">🗑 Clear All Data</button>
-        <input type="file" id="lg-restore-file" accept="application/json" style="display:none;">
+      <div class="lg-header-meta">
+        <div class="lg-date" id="lg-clock"></div>
+        <div class="lg-date" id="lg-storage-mode" style="font-size:10.5px;opacity:.85;margin-top:2px;"></div>
+        <div class="lg-date" id="lg-last-saved" style="font-size:10.5px;opacity:.85;margin-top:2px;"></div>
+        <div class="lg-header-actions">
+          <button class="lg-btn ghost small" id="lg-backup-btn" type="button" title="Download all your data as a file you can keep safe">⬇ Backup</button>
+          <button class="lg-btn ghost small" id="lg-restore-btn" type="button" title="Load a backup file back in">⬆ Restore</button>
+          <button class="lg-btn danger small" id="lg-clear-btn" type="button" title="Wipe everything and start fresh">🗑 Clear All Data</button>
+          <input type="file" id="lg-restore-file" accept="application/json" style="display:none;">
+        </div>
       </div>
     </div>
     <div class="lg-tabs" id="lg-tabs"></div>
@@ -332,6 +386,10 @@
   //                       field), which quietly reconciles + re-renders only if something changed.
   const LS_PREFIX = 'ledgerapp_';
   let needsFirebaseMigration = false;
+  // Last value we know is safely persisted, per storage key. Lets the periodic
+  // safety-net save skip fields that haven't changed instead of rewriting the
+  // whole ledger to the network every 5 minutes.
+  const lastPersisted = Object.create(null);
   const STORAGE_KEYS = [['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
   const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''};
   function fsAllDoc(){
@@ -402,6 +460,7 @@
     STORAGE_KEYS.forEach(([prop,key])=>{
       try{
         const raw = localStorage.getItem(LS_PREFIX+key);
+        if(raw != null) lastPersisted[key] = raw;
         if(prop==='settings'){
           state.settings = Object.assign({}, DEFAULT_SETTINGS, raw ? JSON.parse(raw) : {});
         }else{
@@ -446,6 +505,7 @@
                 state[prop] = parsed;
                 changed = true;
               }
+              lastPersisted[key] = data[key];
               try{ localStorage.setItem(LS_PREFIX+key, data[key]); }catch(e){}
             }catch(e){ /* ignore malformed field, keep local value */ }
           });
@@ -476,14 +536,16 @@
   async function save(prop){
     const keyMap = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
     try{
-      const res = await storageSet(keyMap[prop], JSON.stringify(state[prop]));
+      const value = JSON.stringify(state[prop]);
+      const res = await storageSet(keyMap[prop], value);
       if(!res){ toast('Save failed — try again'); markSaveStatus(false); }
-      else{ markSaveStatus(true); }
+      else{ lastPersisted[keyMap[prop]] = value; markSaveStatus(true); }
     }catch(e){
       toast('Save error: could not reach storage');
       markSaveStatus(false);
     }
   }
+  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
   function markSaveStatus(ok){
     const el = document.getElementById('lg-last-saved');
     if(!el) return;
@@ -494,8 +556,50 @@
   // Redundant safety net: re-save everything every 5 minutes, even if nothing seems to have
   // changed. This catches the case where an earlier save silently failed (e.g. a storage
   // hiccup) so you're never more than 5 minutes from a confirmed-good save.
-  async function autoSaveAll(){
-    await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings'].map(save));
+  // Previously this fanned out into 11 separate save() calls, i.e. 11 network writes to the
+  // SAME Firestore document every 5 minutes regardless of whether anything had changed.
+  // Now: stringify once, skip fields that are already persisted, and send whatever is left
+  // as ONE merge write. An idle ledger costs zero network traffic.
+  async function autoSaveAll(force){
+    const changed = {};
+    let changedCount = 0;
+    Object.keys(SAVE_KEY_MAP).forEach(prop=>{
+      const key = SAVE_KEY_MAP[prop];
+      let value;
+      try{ value = JSON.stringify(state[prop]); }catch(e){ return; }
+      if(!force && lastPersisted[key] === value) return;
+      changed[key] = value;
+      changedCount++;
+    });
+    if(!changedCount) return;
+
+    // Local cache first — cheap, and survives the network call failing.
+    Object.keys(changed).forEach(key=>{
+      try{ localStorage.setItem(LS_PREFIX+key, changed[key]); }catch(e){}
+    });
+
+    if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
+      const payload = {};
+      const stamp = new Date().toISOString();
+      Object.keys(changed).forEach(key=>{ payload[key] = changed[key]; payload[key+'_updatedAt'] = stamp; });
+      try{
+        await fsAllDoc().set(payload, {merge:true});
+        Object.keys(changed).forEach(key=>{ lastPersisted[key] = changed[key]; });
+        markSaveStatus(true);
+      }catch(e){
+        console.error('Batched save failed, kept in local cache:', e);
+        markSaveStatus(false);
+      }
+      return;
+    }
+    if(window.storage){
+      await Promise.all(Object.keys(changed).map(async key=>{
+        try{ await window.storage.set(key, changed[key], false); lastPersisted[key] = changed[key]; }catch(e){}
+      }));
+    }else{
+      Object.keys(changed).forEach(key=>{ lastPersisted[key] = changed[key]; });
+    }
+    markSaveStatus(true);
   }
 
   // ---------- backup / restore ----------
@@ -1076,13 +1180,21 @@
       const now = new Date(), ym = now.toISOString().slice(0,7);
       const n = daysInMonth(now.getFullYear(), now.getMonth());
       const pad = x=>String(x).padStart(2,'0');
+      // One pass over the payments to bucket them by date, instead of re-scanning every
+      // job (and rebuilding allOldDebtPayments()) once per day of the month.
+      const byDate = Object.create(null);
+      state.jobs.forEach(j=>(j.payments||[]).forEach(p=>{
+        if(!p || !p.date) return;
+        byDate[p.date] = (byDate[p.date]||0) + (Number(p.cash)||0) + (Number(p.bank)||0);
+      }));
+      allOldDebtPayments().forEach(p=>{
+        if(!p || !p.date) return;
+        byDate[p.date] = (byDate[p.date]||0) + p.cash + p.bank;
+      });
       const out = [];
       for(let d=1; d<=n; d++){
         const date = `${ym}-${pad(d)}`;
-        let v = 0;
-        state.jobs.forEach(j=>(j.payments||[]).forEach(p=>{ if(p.date===date) v += (Number(p.cash)||0)+(Number(p.bank)||0); }));
-        allOldDebtPayments().forEach(p=>{ if(p.date===date) v += p.cash + p.bank; });
-        out.push({label: fmtDate(date), value: v, tick: (d===1||d%5===0)?String(d):''});
+        out.push({label: fmtDate(date), value: byDate[date]||0, tick: (d===1||d%5===0)?String(d):''});
       }
       return out;
     })();
@@ -1894,7 +2006,13 @@
     document.getElementById('jv-today').addEventListener('click', ()=>{ jobsViewDate = todayISO(); renderJobs(); });
     document.getElementById('jv-datefilter').addEventListener('change', (e)=>{ jobsDateFilterOn = e.target.checked; renderJobs(); });
     const search = document.getElementById('jobs-search');
-    search.addEventListener('input', ()=>renderJobsBody(search.value));
+    // Debounced: rebuilding the whole jobs table on every keystroke is the single
+    // slowest interaction in the app once the ledger has a few hundred jobs.
+    let jobsSearchTimer = null;
+    search.addEventListener('input', ()=>{
+      clearTimeout(jobsSearchTimer);
+      jobsSearchTimer = setTimeout(()=>renderJobsBody(search.value), 180);
+    });
     document.getElementById('jv-export').addEventListener('click', ()=>exportJobsCSV(filteredJobs(search.value), 'jobs'));
     renderJobsBody('');
   }
@@ -2073,6 +2191,10 @@
   // backlog you log (via New Job, using its real intake date) for work that was already
   // in progress before this ledger existed.
   let pendingSearch = '';
+  // renderPending() rebuilds the entire tab, which destroys and recreates #pd-search.
+  // These carry focus + caret across that rebuild so typing isn't interrupted, and
+  // debounce the rebuild so it runs once after typing settles instead of per keystroke.
+  let pendingSearchTimer = null, pendingSearchFocused = false, pendingSearchCaret = 0;
   function pendingJobsList(q){
     return filteredJobs(q).filter(j=>j.status!=='DELIVERED').sort(byDueThenDate);
   }
@@ -2105,7 +2227,18 @@
     document.getElementById('pd-add').addEventListener('click', ()=>{ state.tab='newjob'; renderAll(); });
     document.getElementById('pd-export').addEventListener('click', ()=>exportJobsCSV(jobs, 'pending-jobs'));
     const search = document.getElementById('pd-search');
-    search.addEventListener('input', ()=>{ pendingSearch = search.value; renderPending(); });
+    if(pendingSearchFocused){
+      search.focus();
+      try{ search.setSelectionRange(pendingSearchCaret, pendingSearchCaret); }catch(e){}
+      pendingSearchFocused = false;
+    }
+    search.addEventListener('input', ()=>{
+      pendingSearch = search.value;
+      pendingSearchCaret = search.selectionStart;
+      pendingSearchFocused = true;
+      clearTimeout(pendingSearchTimer);
+      pendingSearchTimer = setTimeout(renderPending, 180);
+    });
     attachStatusHandlers(renderPending);
     attachDeleteHandlers(renderPending);
     attachPaymentHandlers(renderPending);
@@ -3712,11 +3845,14 @@
     updateStorageModeLabel();
     if(needsFirebaseMigration){
       toast('Moving your existing data to the cloud…');
-      await autoSaveAll();
+      await autoSaveAll(true);
       toast('Done \u2014 your data is now backed by Firebase');
     }
     markSaveStatus(true);
-    setInterval(autoSaveAll, 5*60*1000);
+    setInterval(()=>autoSaveAll(), 5*60*1000);
   })();
 })();
 </script>
+
+</body>
+</html>
