@@ -6,7 +6,16 @@ all in one self-contained `index.html`.
 
 ## Live site
 
-Deployed via Netlify, auto-deploying from the `main` branch of this repo.
+**https://octopusgrafix-eng.github.io/ledger/**
+
+Served by GitHub Pages from the `main` branch, root folder. No build step — Pages
+publishes `index.html` as-is, and it's free and unmetered because this repo is public.
+
+> The old `oktopusaccount.netlify.app` URL is **dead and must not be used**. That
+> Netlify account exceeded its credit allowance, so deploys are silently marked
+> *"Skipped due to account credit usage exceeded"* while the last successful build
+> keeps being served with HTTP 200 — it looks healthy but is frozen, and that build
+> predates the sign-in gate, so it exposes the ledger with no login at all.
 
 ## Sign-in
 
