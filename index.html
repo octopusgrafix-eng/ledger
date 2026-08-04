@@ -339,6 +339,17 @@
     // instead of eleven.
     return window.__firestoreDb__.collection('ledgerData').doc('appState');
   }
+  // Firestore's SDK can occasionally hang instead of failing outright on a flaky or
+  // restricted connection — this makes sure we never wait forever for it. If it doesn't
+  // finish in time we treat it as failed and fall back to the local cache, same as any
+  // other Firestore error.
+  function withTimeout(promise, ms, label){
+    ms = ms || 8000;
+    return Promise.race([
+      promise,
+      new Promise((_, reject)=> setTimeout(()=> reject(new Error((label||'Firestore request')+' timed out')), ms))
+    ]);
+  }
   // The Firebase <script> tags are loaded with `defer` (so they don't block first paint),
   // which means they may not have finished loading yet when we first want to talk to
   // Firestore. Poll briefly for readiness rather than assuming it's there.
@@ -382,7 +393,7 @@
     try{ localStorage.setItem(LS_PREFIX+key, value); }catch(e){}
     if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
       try{
-        await fsAllDoc().set({[key]: value, [key+'_updatedAt']: new Date().toISOString()}, {merge:true});
+        await withTimeout(fsAllDoc().set({[key]: value, [key+'_updatedAt']: new Date().toISOString()}, {merge:true}), 8000, 'Cloud save');
         return {key, value, shared:false};
       }catch(e){
         console.error('Firestore save failed, kept in local cache:', e);
@@ -432,7 +443,7 @@
     const firebaseReady = await waitForFirebase();
     if(firebaseReady){
       try{
-        const snap = await fsAllDoc().get();
+        const snap = await withTimeout(fsAllDoc().get(), 8000, 'Cloud sync');
         if(snap.exists){
           const data = snap.data() || {};
           let changed = false;
@@ -498,7 +509,7 @@
     });
     if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
       try{
-        await fsAllDoc().set(payload, {merge:true});
+        await withTimeout(fsAllDoc().set(payload, {merge:true}), 8000, 'Cloud save');
         markSaveStatus(true);
         return true;
       }catch(e){
