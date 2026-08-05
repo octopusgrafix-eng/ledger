@@ -222,6 +222,18 @@
      while it reported itself closed. Hide the content explicitly instead of relying on it. */
   .lg-more:not([open]) > *:not(summary){display:none !important;}
 
+  /* The owed amount doubles as the "record a payment" control. Styled to read as
+     tappable without turning the figure into a link — it must still scan as a number
+     in a column of numbers. */
+  .owed-pay{
+    background:none;border:none;padding:2px 0;cursor:pointer;
+    font-family:var(--font-mono);font-size:13px;font-weight:600;
+    font-variant-numeric:tabular-nums;color:var(--clay);
+    border-bottom:1.5px dotted var(--clay);
+  }
+  .owed-pay:hover,.owed-pay:focus-visible{background:rgba(171,69,48,.1);border-bottom-style:solid;}
+  @media(max-width:760px){ .owed-pay{padding:6px 0;} }
+
   /* ---- Late-job alarm ---- */
   .lg-alarm{
     border:1.5px solid var(--clay);border-left:5px solid var(--clay);
@@ -2857,7 +2869,14 @@
         <td>${withActions ? `<select class="job-status-select" data-id="${j.id}">${STATUSES.map(s=>`<option value="${s}" ${s===j.status?'selected':''}>${s}</option>`).join('')}</select>` : `<span class="stamp ${STATUS_CLASS[j.status]}">${j.status}</span>`}</td>
         <td class="num-col">${naira(t.totalBilled)}</td>
         <td class="num-col">${naira(t.totalPaid)}</td>
-        <td class="num-col ${t.debt>0?'flag':''}">${t.debt>0?naira(t.debt):(t.credit>0?naira(-t.credit):naira(0))}</td>
+        <td class="num-col ${t.debt>0?'flag':''}">${
+          // The owed figure is itself the way to settle it. The 'pay' link lives in the
+          // actions column, which is the last of nine and scrolls off-screen entirely on
+          // a phone — so the debt you can see is the control you can reach.
+          t.debt>0 && withActions
+            ? `<button class="owed-pay job-payment-toggle" data-id="${j.id}" title="Record a payment against this job">${naira(t.debt)}</button>`
+            : (t.debt>0 ? naira(t.debt) : (t.credit>0?naira(-t.credit):naira(0)))
+        }</td>
         ${withActions?`<td class="lg-row-actions"><button class="subtle-link job-guide-toggle" data-id="${j.id}">what to do</button>${t.debt>0?`<button class="subtle-link job-payment-toggle" data-id="${j.id}">pay</button>`:''}<button class="subtle-link job-waste-toggle" data-id="${j.id}">waste</button><button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button>${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener" title="Send this customer a status update on WhatsApp">notify</a>`:''}${(j.payments&&j.payments.length)?`<button class="subtle-link job-receipt" data-id="${j.id}">receipt</button>`:''}<button class="subtle-link job-delete" data-id="${j.id}">remove</button></td>`:''}
       </tr>
       ${withActions && openGuideId===j.id ? `<tr><td colspan="9" style="padding-top:0;">${renderGuideBlock(j)}</td></tr>` : ''}
