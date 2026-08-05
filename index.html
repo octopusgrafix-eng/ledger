@@ -3354,19 +3354,27 @@
         ${!rows.length ? '<div class="lg-empty">No customers yet</div>' : `
         <table><thead><tr>
           <th>Name</th><th>Phone</th><th class="num-col">Jobs</th><th class="num-col">Billed</th><th class="num-col">Paid</th>
-          <th class="num-col">Old Debt Left</th><th class="num-col">Total Debt</th><th>Last Job</th><th></th>
+          <th class="num-col">Old Debt Set</th><th class="num-col">Old Debt Left</th><th class="num-col">Total Debt</th><th>Last Job</th><th></th>
         </tr></thead><tbody>
         ${rows.map(c=>`<tr data-name="${esc(c.name)}">
           <td>${esc(c.name)}</td><td class="muted">${esc(c.phone)||'—'}</td>
           <td class="num-col">${c.jobCount}</td>
           <td class="num-col">${naira(c.totalBilled)}</td>
           <td class="num-col">${naira(c.totalPaid)}</td>
-          <td class="num-col"><input type="number" class="cu-olddebt-edit" data-name="${esc(c.name)}" value="${c.openingDebt}" style="width:90px;text-align:right;"></td>
+          <td class="num-col"><input type="number" class="cu-olddebt-edit" data-name="${esc(c.name)}" value="${c.openingDebt}" style="width:90px;text-align:right;" title="The debt this customer owed before you started using this ledger. Editable."></td>
+          <td class="num-col ${c.openingDebtRemaining>0?'flag':''}">${
+            // Same idea as the owed figure on the jobs table: the amount still outstanding
+            // is itself the way to settle it, rather than a link in the last column that
+            // scrolls off-screen on a phone.
+            c.openingDebtRemaining>0
+              ? `<button class="owed-pay cu-olddebt-toggle" data-name="${esc(c.name)}" title="Record a payment against this customer's old debt">${naira(c.openingDebtRemaining)}</button>`
+              : '<span class="muted">—</span>'
+          }</td>
           <td class="num-col ${c.totalDebt>0?'flag':''}">${naira(c.totalDebt)}</td>
           <td>${fmtDate(c.lastDate)}</td>
           <td>${c.openingDebtRemaining>0?`<button class="subtle-link cu-olddebt-toggle" data-name="${esc(c.name)}">pay old debt</button>`:''}</td>
         </tr>
-        ${openOldDebtId===c.name ? `<tr><td colspan="9" style="padding-top:0;">${renderOldDebtForm(c)}</td></tr>` : ''}
+        ${openOldDebtId===c.name ? `<tr><td colspan="10" style="padding-top:0;">${renderOldDebtForm(c)}</td></tr>` : ''}
         `).join('')}
         </tbody></table>`}
       </div>
