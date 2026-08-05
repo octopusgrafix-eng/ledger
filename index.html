@@ -2466,6 +2466,33 @@
       document.getElementById('nj-total').textContent = naira(total);
       document.getElementById('nj-balance').textContent = naira(Math.max(total-paid,0));
     }
+    // Recall a saved customer instead of retyping them. Typing filters the roster via
+    // <datalist>; a name that matches someone already on it fills in their phone and
+    // flags anything they still owe — which is exactly what you want to know at the
+    // moment you're taking new work from them.
+    recomputeAllCustomers();
+    (function wireCustomerRecall(){
+      const custInput = document.getElementById('nj-customer');
+      const phoneInput = document.getElementById('nj-phone');
+      const hint = document.getElementById('nj-customer-hint');
+      // Once a phone has been typed by hand, stop overwriting it — recalling a saved
+      // number must never clobber one the user has just entered.
+      let phoneTouched = false;
+      phoneInput.addEventListener('input', ()=>{ phoneTouched = true; });
+      function applyCustomer(){
+        const match = state.customers.find(c=>normName(c.name)===normName(custInput.value));
+        if(!match){ hint.innerHTML = ''; return; }
+        if(match.phone && !phoneTouched) phoneInput.value = match.phone;
+        const owed = Number(match.totalDebt)||0;
+        const jobs = Number(match.jobCount)||0;
+        hint.innerHTML = `✓ Saved customer — ${jobs} job${jobs===1?'':'s'} so far`
+          + (match.phone && !phoneTouched ? ', phone filled in' : '')
+          + (owed>0 ? ` &nbsp;·&nbsp; <span class="flag">still owes ${naira(owed)}</span>` : '');
+      }
+      custInput.addEventListener('input', applyCustomer);
+      custInput.addEventListener('change', applyCustomer);
+    })();
+
     renderItemRows();
     document.getElementById('nj-add-item').addEventListener('click', ()=>{ draftItems.push({service:'',category:'',qty:1,unit:'',unitPrice:0,desc:'',descQty:0,descUnit:'',descUnitPrice:0}); renderItemRows(); });
     document.getElementById('nj-cash').addEventListener('input', recalcTotals);
