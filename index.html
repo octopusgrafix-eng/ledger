@@ -394,6 +394,63 @@
   }
   function normName(s){ return (s||'').trim().toUpperCase(); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  // ---------- payment method (cash vs bank transfer) ----------
+  // CP spends and expenses each carry ONE method. Job payments are different: a single
+  // payment can be part cash and part transfer, so those store two amounts rather than
+  // a method. Both shapes reduce to the same {cash, transfer, unknown, total} summary.
+  //
+  // Entries logged before this existed have no `method`, and are deliberately reported
+  // as "Not recorded" rather than assumed to be cash — guessing would put figures in the
+  // books that were never actually recorded, and you could never tell which.
+  function methodLabel(m){
+    return m==='cash' ? 'Cash' : (m==='transfer' ? 'Bank Transfer' : 'Not recorded');
+  }
+  function methodTag(m){
+    const colour = m==='cash' ? 'var(--green)' : (m==='transfer' ? 'var(--teal)' : 'var(--clay)');
+    const text = m==='cash' ? 'CASH' : (m==='transfer' ? 'TRANSFER' : 'NOT RECORDED');
+    return `<span style="font-size:10px;letter-spacing:.8px;color:${colour};font-weight:600;">${text}</span>`;
+  }
+  // Inline picker used on existing rows so past entries can be filled in retroactively.
+  function methodSelectHTML(cls, id, current){
+    return `<select class="${cls}" data-id="${id}" style="font-size:11.5px;padding:3px 4px;width:auto;">
+      <option value=""${!current?' selected':''}>— not recorded —</option>
+      <option value="cash"${current==='cash'?' selected':''}>Cash</option>
+      <option value="transfer"${current==='transfer'?' selected':''}>Bank Transfer</option>
+    </select>`;
+  }
+  // For anything with {amount, method} — CP spends, expenses.
+  function splitByMethod(rows){
+    const out = {cash:0, transfer:0, unknown:0, total:0};
+    (rows||[]).forEach(r=>{
+      const a = Number(r.amount)||0;
+      out.total += a;
+      if(r.method==='cash') out.cash += a;
+      else if(r.method==='transfer') out.transfer += a;
+      else out.unknown += a;
+    });
+    return out;
+  }
+  // For job payments and old-debt payments, which carry separate cash/bank amounts.
+  function splitPayments(payments){
+    const out = {cash:0, transfer:0, unknown:0, total:0};
+    (payments||[]).forEach(p=>{
+      const c = Number(p.cash)||0, b = Number(p.bank)||0;
+      out.cash += c; out.transfer += b; out.total += c + b;
+    });
+    return out;
+  }
+  // Shared presentation so the same breakdown reads identically everywhere it appears.
+  function methodBreakdownHTML(split, opts){
+    opts = opts || {};
+    const noun = opts.noun || 'spent';
+    return `<div class="lg-grid cols-${split.unknown>0?'4':'3'}">
+      <div class="lg-card lg-kpi paid"><div class="num">${naira(split.cash)}</div><div class="lbl">Cash ${noun}</div></div>
+      <div class="lg-card lg-kpi teal"><div class="num">${naira(split.transfer)}</div><div class="lbl">Bank Transfer ${noun}</div></div>
+      ${split.unknown>0 ? `<div class="lg-card lg-kpi debt"><div class="num">${naira(split.unknown)}</div><div class="lbl">Method Not Recorded</div></div>` : ''}
+      <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(split.total)}</div><div class="lbl">Total</div></div>
+    </div>`;
+  }
+
   function isoWeekLabel(iso){
     const d = new Date(iso+'T00:00:00');
     const target = new Date(d.valueOf());
@@ -1281,9 +1338,9 @@
     downloadCSV(`${name}-${todayISO()}.csv`, rows);
   }
   function exportExpensesCSV(){
-    const rows = [['Date','Category','Amount','Note']];
+    const rows = [['Date','Category','Amount','Paid with','Note']];
     state.expenses.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''))
-      .forEach(e=>rows.push([e.date||'', e.category||'', plainNum(e.amount), e.note||'']));
+      .forEach(e=>rows.push([e.date||'', e.category||'', plainNum(e.amount), methodLabel(e.method), e.note||'']));
     downloadCSV(`expenses-${todayISO()}.csv`, rows);
   }
   function exportCustomersCSV(){
@@ -1700,7 +1757,98 @@
     });
     const topCustomers = Array.from(custMap.values()).filter(x=>x.billed>0).sort((a,b)=>b.billed-a.billed).slice(0,6);
 
+    // ---- Cash vs bank transfer for the month ----
+    // Money in comes from the cash/bank amounts already recorded on every payment.
+    // Money out comes from the method recorded on each CP spend and expense.
+    const inMonth = iso => (iso||'').slice(0,7) === ymNow;
+    const monthPayments = [];
+    state.jobs.forEach(j=>(j.payments||[]).forEach(p=>{ if(inMonth(p.date)) monthPayments.push(p); }));
+    allOldDebtPayments().forEach(p=>{ if(inMonth(p.date)) monthPayments.push(p); });
+    const inSplit = splitPayments(monthPayments);
+    const cpSplit = splitByMethod(state.cpspend.filter(e=>inMonth(e.date)));
+    const exSplit = splitByMethod(state.expenses.filter(e=>inMonth(e.date)));
+    const netCashMethod     = inSplit.cash - cpSplit.cash - exSplit.cash;
+    const netTransferMethod = inSplit.transfer - cpSplit.transfer - exSplit.transfer;
+    const outUnknown = cpSplit.unknown + exSplit.unknown;
+    const money = v => `<td class="num-col">${naira(v)}</td>`;
+    const gap = v => v>0
+      ? `<td class="num-col flag">${naira(v)}</td>`
+      : `<td class="num-col muted">—</td>`;
+
+    // Everything still missing a method, across ALL dates and both kinds of spending.
+    // Without this you would have to page through the CP Account and Expenses tabs one
+    // day at a time hunting for entries logged before the field existed.
+    const unrecorded = []
+      .concat(state.cpspend.filter(e=>!e.method).map(e=>({kind:'cp', id:e.id, date:e.date, what:e.item, note:e.note, amount:Number(e.amount)||0})))
+      .concat(state.expenses.filter(e=>!e.method).map(e=>({kind:'ex', id:e.id, date:e.date, what:e.category, note:e.note, amount:Number(e.amount)||0})))
+      .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
     content.innerHTML = `
+      <div class="lg-card">
+        <div class="lg-card-title">Cash vs Bank Transfer — ${monthLabel}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          Exactly how much moved as physical cash and how much moved through the bank.
+          <b>Net</b> is what each should have gained this month — use it to check the cash box against the bank balance.
+          ${outUnknown>0 ? `<span class="flag">${naira(outUnknown)} of spending has no method recorded yet</span> — set it on the CP Account and Expenses tabs and it will move into the right column.` : ''}
+        </div>
+        <div style="overflow-x:auto;"><table>
+          <thead><tr>
+            <th></th>
+            <th class="num-col">Cash</th>
+            <th class="num-col">Bank Transfer</th>
+            <th class="num-col">Not recorded</th>
+            <th class="num-col">Total</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Money in</b> <span class="muted">— payments collected</span></td>
+              ${money(inSplit.cash)}${money(inSplit.transfer)}
+              <td class="num-col muted">—</td>
+              ${money(inSplit.total)}
+            </tr>
+            <tr>
+              <td>Cost of Production <span class="muted">— out</span></td>
+              ${money(cpSplit.cash)}${money(cpSplit.transfer)}${gap(cpSplit.unknown)}${money(cpSplit.total)}
+            </tr>
+            <tr>
+              <td>Expenses <span class="muted">— out</span></td>
+              ${money(exSplit.cash)}${money(exSplit.transfer)}${gap(exSplit.unknown)}${money(exSplit.total)}
+            </tr>
+            <tr style="font-weight:700;border-top:2px solid var(--ink);">
+              <td>NET</td>
+              <td class="num-col" style="color:${netCashMethod<0?'var(--clay)':'var(--green)'};">${naira(netCashMethod)}</td>
+              <td class="num-col" style="color:${netTransferMethod<0?'var(--clay)':'var(--teal)'};">${naira(netTransferMethod)}</td>
+              ${gap(outUnknown)}
+              ${money(inSplit.total - cpSplit.total - exSplit.total)}
+            </tr>
+          </tbody>
+        </table></div>
+      </div>
+
+      ${!unrecorded.length ? '' : `
+      <div class="lg-card" style="border-left:3px solid var(--clay);">
+        <div class="lg-card-title">Spending with no method recorded (${unrecorded.length}) — ${naira(unrecorded.reduce((s,x)=>s+x.amount,0))}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          These were logged before cash/transfer was tracked, so they sit outside the split above.
+          Set each one here and it moves into the right column — no need to hunt through past dates.
+          Everything from now on asks for the method when you log it.
+        </div>
+        <div style="overflow-x:auto;"><table>
+          <thead><tr><th>Date</th><th>Type</th><th>What</th><th class="num-col">Amount</th><th>Paid with</th></tr></thead>
+          <tbody>${unrecorded.map(x=>`<tr>
+            <td>${x.date?fmtDate(x.date):'—'}</td>
+            <td><span class="muted" style="font-size:11px;">${x.kind==='cp'?'CP':'Expense'}</span></td>
+            <td>${esc(x.what)||'—'}${x.note?` <span class="muted">— ${esc(x.note)}</span>`:''}</td>
+            <td class="num-col">${naira(x.amount)}</td>
+            <td><select class="sm-method-set" data-id="${x.id}" data-kind="${x.kind}" style="font-size:11.5px;padding:3px 4px;width:auto;">
+              <option value="" selected>— choose —</option>
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank Transfer</option>
+            </select></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>`}
+
       <div class="lg-card">
         <div class="lg-card-title">Shop Details — shown on printed receipts</div>
         <div class="lg-grid cols-3">
@@ -1786,6 +1934,19 @@
         </tbody></table></div>
       </div>
     `;
+    // Clear the backlog of entries logged before the method field existed.
+    content.querySelectorAll('.sm-method-set').forEach(sel=>{
+      sel.addEventListener('change', async ()=>{
+        if(!sel.value) return;
+        const list = sel.dataset.kind === 'cp' ? state.cpspend : state.expenses;
+        const entry = list.find(x=>x.id===sel.dataset.id);
+        if(!entry) return;
+        entry.method = sel.value;
+        await save(sel.dataset.kind === 'cp' ? 'cpspend' : 'expenses');
+        toast('Marked as ' + methodLabel(sel.value));
+        renderSummary();
+      });
+    });
     document.getElementById('sm-save-shop').addEventListener('click', async ()=>{
       state.settings.shopName = document.getElementById('sm-shopname').value.trim() || 'YOUR BUSINESS NAME';
       state.settings.shopPhone = document.getElementById('sm-shopphone').value.trim();
@@ -3343,8 +3504,15 @@
           <div><label style="margin-top:0">Date</label><input id="ex-date" type="date" value="${expensesViewDate}"></div>
           <div><label style="margin-top:0">Category</label><input id="ex-category" placeholder="e.g. Rent, Fuel, Salary"></div>
           <div><label style="margin-top:0">Amount (\u20a6)</label><input id="ex-amount" type="number" min="0" value="0"></div>
-          <div><label style="margin-top:0">Note</label><input id="ex-note" placeholder="optional"></div>
+          <div><label style="margin-top:0">Paid with</label>
+            <select id="ex-method">
+              <option value="">\u2014 choose \u2014</option>
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank Transfer</option>
+            </select>
+          </div>
         </div>
+        <div><label>Note</label><input id="ex-note" placeholder="optional"></div>
         <div style="margin-top:10px;" class="lg-row-actions">
           <button class="lg-btn" id="ex-add">Add Expense</button>
           <button class="lg-btn ghost small" id="ex-export" type="button">\u2b07 Export all expenses CSV</button>
@@ -3353,11 +3521,13 @@
 
       <div class="lg-card">
         <div class="lg-card-title">Expenses on ${fmtDate(expensesViewDate)} (${dayRows.length}) \u2014 ${naira(r.spent)}</div>
+        ${methodBreakdownHTML(splitByMethod(dayRows), {noun:'this day'})}
         ${!dayRows.length ? '<div class="lg-empty">No expenses logged on this day.</div>' : `
-        <table><thead><tr><th>Category</th><th>Note</th><th class="num-col">Amount</th><th></th></tr></thead>
+        <table><thead><tr><th>Category</th><th>Note</th><th class="num-col">Amount</th><th>Paid with</th><th></th></tr></thead>
         <tbody>${dayRows.map(e=>`<tr data-id="${e.id}">
           <td>${esc(e.category)||'\u2014'}</td><td class="muted">${esc(e.note)||'\u2014'}</td>
           <td class="num-col">${naira(e.amount)}</td>
+          <td>${methodSelectHTML('ex-method-set', e.id, e.method)}</td>
           <td><button class="subtle-link ex-delete" data-id="${e.id}">remove</button></td>
         </tr>`).join('')}
         <tr style="font-weight:700;border-top:2px solid var(--ink);">
@@ -3382,19 +3552,27 @@
           <div><label style="margin-top:0">Category</label><input id="rc-category" placeholder="e.g. Rent"></div>
           <div><label style="margin-top:0">Amount (\u20a6)</label><input id="rc-amount" type="number" min="0" value="0"></div>
           <div><label style="margin-top:0">Day of month</label><input id="rc-day" type="number" min="1" max="28" value="1"></div>
-          <div><label style="margin-top:0">Note</label><input id="rc-note" placeholder="optional"></div>
+          <div><label style="margin-top:0">Paid with</label>
+            <select id="rc-method">
+              <option value="">\u2014 choose \u2014</option>
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank Transfer</option>
+            </select>
+          </div>
         </div>
+        <div><label>Note</label><input id="rc-note" placeholder="optional"></div>
         <div style="margin-top:10px;" class="lg-row-actions">
           <button class="lg-btn ghost small" id="rc-add" type="button">Save recurring expense</button>
           ${state.recurring.length?`<button class="lg-btn small" id="rc-post" type="button">Post ${unpostedCount} to ${monthLabel}</button>`:''}
         </div>
         ${!state.recurring.length ? '<div class="lg-empty">No recurring expenses saved yet.</div>' : `
-        <table style="margin-top:10px;"><thead><tr><th>Category</th><th>Note</th><th class="num-col">Day</th><th class="num-col">Amount</th><th>${monthLabel}</th><th></th></tr></thead><tbody>
+        <table style="margin-top:10px;"><thead><tr><th>Category</th><th>Note</th><th class="num-col">Day</th><th class="num-col">Amount</th><th>Paid with</th><th>${monthLabel}</th><th></th></tr></thead><tbody>
         ${state.recurring.map(rc=>{
           const posted = isRecurringPosted(rc, ym);
           return `<tr>
             <td>${esc(rc.category)}</td><td class="muted">${esc(rc.note)||'\u2014'}</td>
             <td class="num-col">${rc.day||1}</td><td class="num-col">${naira(rc.amount)}</td>
+            <td>${methodTag(rc.method)}</td>
             <td>${posted?'<span style="color:var(--green);font-weight:600;">posted</span>':'<span class="muted">not yet</span>'}</td>
             <td><button class="subtle-link rc-delete" data-id="${rc.id}">remove</button></td>
           </tr>`;
@@ -3445,17 +3623,31 @@
     document.getElementById('ex-add').addEventListener('click', async ()=>{
       const amount = Number(document.getElementById('ex-amount').value)||0;
       const category = document.getElementById('ex-category').value.trim();
+      const method = document.getElementById('ex-method').value;
       if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+      if(!method){ toast('Choose whether it was paid with cash or bank transfer'); return; }
       state.expenses.push({
         id: uid(),
         date: document.getElementById('ex-date').value || todayISO(),
         category: category || 'General',
         amount,
+        method,
         note: document.getElementById('ex-note').value.trim(),
       });
       await save('expenses');
       toast('Expense logged \u2014 ' + naira(amount));
       renderExpenses();
+    });
+    // Retroactively set the method on an entry logged before this field existed.
+    content.querySelectorAll('.ex-method-set').forEach(sel=>{
+      sel.addEventListener('change', async ()=>{
+        const e = state.expenses.find(x=>x.id===sel.dataset.id);
+        if(!e) return;
+        if(sel.value) e.method = sel.value; else delete e.method;
+        await save('expenses');
+        toast(sel.value ? ('Marked as ' + methodLabel(sel.value)) : 'Method cleared');
+        renderExpenses();
+      });
     });
     content.querySelectorAll('.ex-delete').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
@@ -3469,10 +3661,12 @@
     document.getElementById('rc-add').addEventListener('click', async ()=>{
       const category = document.getElementById('rc-category').value.trim();
       const amount = Number(document.getElementById('rc-amount').value)||0;
+      const method = document.getElementById('rc-method').value;
       if(!category){ toast('Give it a category, e.g. Rent'); return; }
       if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+      if(!method){ toast('Choose whether it is paid with cash or bank transfer'); return; }
       state.recurring.push({
-        id: uid(), category, amount,
+        id: uid(), category, amount, method,
         day: Math.min(Math.max(Number(document.getElementById('rc-day').value)||1, 1), 28),
         note: document.getElementById('rc-note').value.trim(),
       });
@@ -3490,7 +3684,7 @@
         const day = Math.min(Number(rc.day)||1, daysInMonth(Number(ym.slice(0,4)), Number(ym.slice(5,7))-1));
         state.expenses.push({
           id: uid(), date: `${ym}-${pad2(day)}`, category: rc.category,
-          amount: Number(rc.amount)||0, note: rc.note || 'Recurring', recurringId: rc.id,
+          amount: Number(rc.amount)||0, method: rc.method, note: rc.note || 'Recurring', recurringId: rc.id,
         });
         total += Number(rc.amount)||0;
       });
@@ -3683,19 +3877,28 @@
           <div><label style="margin-top:0">Date</label><input id="cp-sp-date" type="date" value="${cpViewDate}"></div>
           <div><label style="margin-top:0">Spent on</label><input id="cp-sp-item" list="cp-item-list" placeholder="e.g. Ink, Transport"></div>
           <div><label style="margin-top:0">Amount (\u20a6)</label><input id="cp-sp-amount" type="number" min="0" value="0"></div>
-          <div><label style="margin-top:0">Note</label><input id="cp-sp-note" placeholder="optional \u2014 who, where, which job"></div>
+          <div><label style="margin-top:0">Paid with</label>
+            <select id="cp-sp-method">
+              <option value="">\u2014 choose \u2014</option>
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank Transfer</option>
+            </select>
+          </div>
         </div>
+        <div><label>Note</label><input id="cp-sp-note" placeholder="optional \u2014 who, where, which job"></div>
         <div style="margin-top:10px;"><button class="lg-btn" id="cp-sp-add" type="button">Add spending</button></div>
       </div>
 
       <div class="lg-card">
         <div class="lg-card-title">Spent on ${fmtDate(cpViewDate)} (${dayRows.length}) \u2014 ${naira(r.spent)}</div>
+        ${methodBreakdownHTML(splitByMethod(dayRows), {noun:'this day'})}
         ${!dayRows.length ? '<div class="lg-empty">Nothing logged against the purse today. Add the first entry above.</div>' : `
-        <table><thead><tr><th>Spent on</th><th>Note</th><th class="num-col">Amount</th><th></th></tr></thead>
+        <table><thead><tr><th>Spent on</th><th>Note</th><th class="num-col">Amount</th><th>Paid with</th><th></th></tr></thead>
         <tbody>${dayRows.map(e=>`<tr>
           <td>${esc(e.item)||'\u2014'}</td>
           <td class="muted">${esc(e.note)||'\u2014'}</td>
           <td class="num-col">${naira(e.amount)}</td>
+          <td>${methodSelectHTML('cp-method-set', e.id, e.method)}</td>
           <td><button class="subtle-link cp-sp-delete" data-id="${e.id}">remove</button></td>
         </tr>`).join('')}
         <tr style="font-weight:700;border-top:2px solid var(--ink);">
@@ -3754,17 +3957,31 @@
     document.getElementById('cp-sp-add').addEventListener('click', async ()=>{
       const amount = Number(document.getElementById('cp-sp-amount').value)||0;
       const item = document.getElementById('cp-sp-item').value.trim();
+      const method = document.getElementById('cp-sp-method').value;
       if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+      if(!method){ toast('Choose whether it was paid with cash or bank transfer'); return; }
       state.cpspend.push({
         id: uid(),
         date: document.getElementById('cp-sp-date').value || cpViewDate,
         item: item || 'Production',
         amount,
+        method,
         note: document.getElementById('cp-sp-note').value.trim(),
       });
       await save('cpspend');
       toast('Logged ' + naira(amount) + ' from the purse');
       renderCPAccount();
+    });
+    // Retroactively set the method on a spend logged before this field existed.
+    content.querySelectorAll('.cp-method-set').forEach(sel=>{
+      sel.addEventListener('change', async ()=>{
+        const e = state.cpspend.find(x=>x.id===sel.dataset.id);
+        if(!e) return;
+        if(sel.value) e.method = sel.value; else delete e.method;
+        await save('cpspend');
+        toast(sel.value ? ('Marked as ' + methodLabel(sel.value)) : 'Method cleared');
+        renderCPAccount();
+      });
     });
     content.querySelectorAll('.cp-sp-delete').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
