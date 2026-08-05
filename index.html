@@ -171,7 +171,10 @@
     box-shadow:0 4px 14px rgba(0,0,0,0.25);z-index:999;opacity:0;transition:opacity .25s;
   }
   .toast.show{opacity:1;}
-  .item-row{display:grid;grid-template-columns:1.3fr 1.1fr 0.6fr 0.7fr 0.9fr 0.9fr auto;gap:6px;align-items:end;margin-bottom:6px;}
+  /* Item name + Qty + Unit + Unit Price + Amount + remove. The old layout carried a
+     seventh column for a separate "quick pick" catalog dropdown; the name field is now
+     a datalist, so the two are one control. */
+  .item-row{display:grid;grid-template-columns:1.8fr 0.6fr 0.7fr 0.9fr 0.9fr auto;gap:6px;align-items:end;margin-bottom:6px;}
   @media(max-width:700px){.item-row{grid-template-columns:1fr 1fr;}}
   .item-desc-row{display:grid;grid-template-columns:2fr 0.6fr 0.7fr 0.9fr 0.9fr;gap:6px;align-items:end;margin-top:6px;}
   @media(max-width:700px){.item-desc-row{grid-template-columns:1fr 1fr;}}
@@ -199,6 +202,43 @@
   .lg-receipt .r-foot{text-align:center; font-size:11px; color:#666; margin-top:10px;}
   .lg-receipt-actions{display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap;}
   .lg-receipt-actions .lg-btn{flex:1; text-align:center;}
+  /* Computed figures shown beside inputs. Rendered as text, not a disabled input —
+     a greyed-out box that can't be typed in still reads as a field you should fill. */
+  .item-row .it-amt, .item-desc-row .it-desc-amt{
+    font-family:var(--font-mono);font-size:13.5px;padding:7px 2px;
+    font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;
+  }
+  /* Optional section, collapsed by default so a walk-in job isn't buried in fields. */
+  .lg-more > summary{
+    cursor:pointer;list-style:none;
+    font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);
+  }
+  .lg-more > summary::-webkit-details-marker{display:none;}
+  .lg-more > summary::before{content:"\25B8 ";display:inline-block;transition:transform .15s;}
+  .lg-more[open] > summary::before{transform:rotate(90deg);}
+  .lg-more > summary:hover{color:var(--ink);}
+  /* The browser's own "hide a closed <details>" rule loses to an author rule that sets
+     display on a child — .lg-grid{display:grid} was enough to keep this section on screen
+     while it reported itself closed. Hide the content explicitly instead of relying on it. */
+  .lg-more:not([open]) > *:not(summary){display:none !important;}
+
+  /* ---- Late-job alarm ---- */
+  .lg-alarm{
+    border:1.5px solid var(--clay);border-left:5px solid var(--clay);
+    background:rgba(171,69,48,0.07);border-radius:3px;
+    padding:11px 14px;margin-bottom:14px;
+    display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  }
+  .lg-alarm .al-main{font-family:var(--font-slab);font-weight:700;font-size:14px;color:var(--clay);}
+  .lg-alarm .al-list{font-size:12px;color:var(--ink);margin-top:3px;line-height:1.5;}
+  .lg-alarm .al-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  @keyframes lg-alarm-pulse{0%,100%{opacity:1;}50%{opacity:.55;}}
+  .lg-alarm .al-dot{
+    display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:var(--clay);margin-right:7px;animation:lg-alarm-pulse 1.6s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce){ .lg-alarm .al-dot{animation:none;} }
+
   /* ---- Sign-in gate ---- */
   /* The ledger is hidden until Firebase Auth confirms a signed-in user, so the books
      are never painted for someone who isn't logged in. */
@@ -309,6 +349,7 @@
         </div>
       </div>
     </div>
+    <div id="lg-alarm"></div>
     <div class="lg-tabs" id="lg-tabs"></div>
     <div id="lg-content"><div class="lg-empty">Loading ledger…</div></div>
   </div>
@@ -1403,6 +1444,97 @@
     downloadCSV(`customers-${todayISO()}.csv`, rows);
   }
 
+  // ---------- late-job alarm ----------
+  // Deliberately no AI and no network: a job is late when its promised date has passed
+  // and it isn't DELIVERED. That's a date comparison, and it needs to be instant,
+  // free, and work offline — so it runs off dueInfo() and nothing else.
+  //
+  // Which jobs a device has already alerted on is kept in localStorage rather than in
+  // the synced ledger: the desktop having shown a notification shouldn't stop the phone
+  // from showing its own.
+  const ALARM_SEEN_KEY = 'ledgerapp_alarm_seen';
+  let alarmTimer = null;
+
+  function alarmSeen(){
+    try{ return new Set(JSON.parse(localStorage.getItem(ALARM_SEEN_KEY) || '[]')); }
+    catch(e){ return new Set(); }
+  }
+  function alarmMarkSeen(ids){
+    try{ localStorage.setItem(ALARM_SEEN_KEY, JSON.stringify(ids.slice(-300))); }catch(e){}
+  }
+
+  function renderAlarm(){
+    const el = document.getElementById('lg-alarm');
+    if(!el) return;
+    const late = overdueJobs();
+    if(!late.length){ el.innerHTML = ''; return; }
+
+    const worst = late[0];                       // soonest promised date = longest overdue
+    const worstDays = Math.abs(dueInfo(worst).days || 0);
+    const preview = late.slice(0,3).map(j=>
+      `${esc(j.customerName || 'WALKIN')} <span class="muted">— ${dueInfo(j).note}</span>`
+    ).join(' &nbsp;·&nbsp; ');
+
+    el.innerHTML = `<div class="lg-alarm" role="alert">
+      <div>
+        <div class="al-main"><span class="al-dot"></span>${late.length} job${late.length===1?'':'s'} past the promised date${
+          late.length===1 ? '' : ` — longest ${worstDays} day${worstDays===1?'':'s'}`}</div>
+        <div class="al-list">${preview}${late.length>3?` <span class="muted">and ${late.length-3} more</span>`:''}</div>
+      </div>
+      <div class="al-actions">
+        <button class="lg-btn small" id="al-goto" type="button">See them</button>
+        ${notifySupported() && Notification.permission === 'default'
+          ? '<button class="lg-btn ghost small" id="al-notify" type="button" title="Get a desktop or phone notification when a job goes past its date">Alert me</button>'
+          : ''}
+      </div>
+    </div>`;
+
+    document.getElementById('al-goto').addEventListener('click', ()=>{
+      state.tab = 'pending';
+      renderAll();
+    });
+    const notifyBtn = document.getElementById('al-notify');
+    if(notifyBtn) notifyBtn.addEventListener('click', async ()=>{
+      try{
+        const res = await Notification.requestPermission();
+        toast(res === 'granted' ? 'Alerts on — you’ll be told when a job runs late' : 'Alerts not enabled');
+        renderAlarm();
+        if(res === 'granted') notifyNewlyLate(late);
+      }catch(e){ toast('This browser would not enable alerts'); }
+    });
+  }
+
+  function notifySupported(){
+    return typeof Notification !== 'undefined' && location.protocol === 'https:';
+  }
+  // Fires once per job, per device — going late is the event, not still being late.
+  function notifyNewlyLate(late){
+    if(!notifySupported() || Notification.permission !== 'granted') return;
+    const seen = alarmSeen();
+    const fresh = late.filter(j=>!seen.has(j.id));
+    if(!fresh.length) return;
+    const body = fresh.length === 1
+      ? `${fresh[0].customerName || 'WALKIN'} — ${dueInfo(fresh[0]).note}`
+      : fresh.slice(0,3).map(j=>`${j.customerName || 'WALKIN'} (${dueInfo(j).note})`).join(', ')
+        + (fresh.length>3 ? ` +${fresh.length-3} more` : '');
+    try{
+      new Notification(
+        fresh.length === 1 ? 'A job is past its promised date' : `${fresh.length} jobs are past their promised date`,
+        {body, tag:'lg-late-jobs', icon:'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="10" fill="%23AB4530"/></svg>')}
+      );
+    }catch(e){ /* some browsers block construction outside a service worker */ }
+    alarmMarkSeen([...seen, ...fresh.map(j=>j.id)]);
+  }
+
+  // A job can cross its promised date while the app is just sitting open, so re-check
+  // on a timer as well as on every render.
+  function startAlarmWatch(){
+    if(alarmTimer) clearInterval(alarmTimer);
+    const tick = ()=>{ renderAlarm(); notifyNewlyLate(overdueJobs()); };
+    alarmTimer = setInterval(tick, 5*60*1000);
+    tick();
+  }
+
   // ---------- render shell ----------
   function renderTabs(){
     tabsEl.innerHTML = TABS.map(t=>`<button class="lg-tab ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}</button>`).join('');
@@ -1414,6 +1546,7 @@
   function renderAll(){
     renderTabs();
     if(!state.loaded){ content.innerHTML = '<div class="lg-empty">Loading ledger…</div>'; return; }
+    renderAlarm();
     if(state.tab==='dashboard') renderDashboard();
     else if(state.tab==='dayview') renderDayView();
     else if(state.tab==='summary') renderSummary();
@@ -2166,53 +2299,57 @@
   let draftItems = [{service:'', category:'', qty:1, unit:'', unitPrice:0, desc:'', descQty:0, descUnit:'', descUnitPrice:0}];
   let draftMaterials = [{name:'', qty:0, unitCost:0, waste:0}];
   function renderNewJob(){
-    const options = state.pricelist.map(p=>`<option value="${p.id}" data-price="${p.price}">${esc(p.name)} — ${naira(p.price)}</option>`).join('');
     content.innerHTML = `
       <div class="lg-card">
-        <div class="lg-card-title">Job Intake — Received</div>
+        <div class="lg-card-title">1 · Customer</div>
         <div class="lg-grid cols-3">
-          <div><label>Customer Name</label><input id="nj-customer" placeholder="e.g. WALKIN, OLIVER..."></div>
-          <div><label>Phone (optional)</label><input id="nj-phone" placeholder="080..."></div>
-          <div><label>Date Received</label><input id="nj-date" type="date" value="${todayISO()}"></div>
+          <div><label style="margin-top:0">Customer Name</label><input id="nj-customer" placeholder="e.g. WALKIN, OLIVER..."></div>
+          <div><label style="margin-top:0">Phone (optional)</label><input id="nj-phone" placeholder="080..."></div>
+          <div><label style="margin-top:0">Date Received</label><input id="nj-date" type="date" value="${todayISO()}"></div>
         </div>
-        <div class="lg-grid cols-2" style="margin-top:4px;">
-          <div><label style="margin-top:0">Promised / Due Date</label><input id="nj-due" type="date"></div>
-          <div class="readout" style="align-self:end;font-size:11px;color:var(--muted);padding-bottom:8px;">When you told the customer it would be ready. Pending Jobs sorts by this, and anything past its date gets flagged.</div>
+        <div class="lg-grid cols-2">
+          <div><label>Promised / Due Date</label><input id="nj-due" type="date"></div>
+          <div><label>Job Description / Notes</label><input id="nj-desc" placeholder="e.g. Rollup banner + design"></div>
         </div>
-        <label>Job Description / Notes</label>
-        <input id="nj-desc" placeholder="e.g. Rollup banner + design">
+        <div class="readout" style="font-size:11px;color:var(--muted);margin-top:6px;">The promised date is what Pending Jobs sorts by, and anything past it gets flagged as late.</div>
+      </div>
 
-        <div style="margin-top:14px;">
-          <label style="margin-top:0">Items / Services</label>
-          <div id="nj-items"></div>
-          <button class="lg-btn ghost small" id="nj-add-item" type="button">+ Add item</button>
-        </div>
+      <div class="lg-card">
+        <div class="lg-card-title">2 · What they're buying</div>
+        <datalist id="nj-item-list">${state.pricelist.map(p=>`<option value="${esc(p.name)}">${naira(p.price)}${p.unit?' / '+esc(p.unit):''}</option>`).join('')}</datalist>
+        <div id="nj-items"></div>
+        <button class="lg-btn ghost small" id="nj-add-item" type="button">+ Add item</button>
+      </div>
 
-        <div class="lg-grid cols-3" style="margin-top:14px;">
-          <div><label>Paid — Cash</label><input id="nj-cash" type="number" min="0" value="0"></div>
-          <div><label>Paid — Bank/Transfer</label><input id="nj-bank" type="number" min="0" value="0"></div>
-          <div><label>Cost of Production (CP)</label><input id="nj-cp" type="number" min="0" value="0"></div>
+      <div class="lg-card">
+        <div class="lg-card-title">3 · Payment</div>
+        <div class="lg-grid cols-3">
+          <div><label style="margin-top:0">Paid — Cash</label><input id="nj-cash" type="number" min="0" value="0"></div>
+          <div><label style="margin-top:0">Paid — Bank/Transfer</label><input id="nj-bank" type="number" min="0" value="0"></div>
+          <div><label style="margin-top:0">Discount (₦)</label><input id="nj-discount" type="number" min="0" value="0" placeholder="0"></div>
         </div>
-        <div class="lg-grid cols-2" style="margin-top:4px;">
-          <div><label>Discount (₦)</label><input id="nj-discount" type="number" min="0" value="0" placeholder="0"></div>
-          <div class="readout" style="align-self:end;font-size:11px;color:var(--muted);padding-bottom:8px;">Knocked off the items subtotal below — for a special rate, bulk order, or loyal customer.</div>
-        </div>
+        <div class="readout" style="font-size:11px;color:var(--muted);margin-top:6px;">A discount is knocked off the items subtotal — for a special rate, bulk order, or loyal customer.</div>
+      </div>
 
-        <label style="margin-top:14px;">Materials Used (optional — updates Inventory automatically, one row per material)</label>
-        <datalist id="nj-material-list">${state.materials.map(m=>`<option value="${esc(m.name)}">`).join('')}</datalist>
-        <div id="nj-materials"></div>
-        <button class="lg-btn ghost small" id="nj-add-material" type="button">+ Add material</button>
-        <div class="readout" style="font-size:11px;color:var(--muted);margin-top:6px;">Total material used + wasted: <span id="nj-material-grandtotal">₦0</span> — both are deducted from stock, and both come out of today's (and this month's) profit. This job's own profit isn't reduced by it directly.</div>
-
-        <div class="lg-grid cols-2" style="margin-top:4px;">
-          <div><label>Operator</label><input id="nj-operator" placeholder="who's handling it"></div>
-          <div><label>Status</label>
+      <details class="lg-card lg-more">
+        <summary>More details — cost, materials, operator <span class="muted">(optional)</span></summary>
+        <div class="lg-grid cols-3" style="margin-top:12px;">
+          <div><label style="margin-top:0">Cost of Production (CP)</label><input id="nj-cp" type="number" min="0" value="0"></div>
+          <div><label style="margin-top:0">Operator</label><input id="nj-operator" placeholder="who's handling it"></div>
+          <div><label style="margin-top:0">Status</label>
             <select id="nj-status">${STATUSES.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
           </div>
         </div>
 
+        <label style="margin-top:14px;">Materials Used — updates Inventory automatically, one row per material</label>
+        <datalist id="nj-material-list">${state.materials.map(m=>`<option value="${esc(m.name)}">`).join('')}</datalist>
+        <div id="nj-materials"></div>
+        <button class="lg-btn ghost small" id="nj-add-material" type="button">+ Add material</button>
+        <div class="readout" style="font-size:11px;color:var(--muted);margin-top:6px;">Total material used + wasted: <span id="nj-material-grandtotal">₦0</span> — both are deducted from stock, and both come out of today's (and this month's) profit. This job's own profit isn't reduced by it directly.</div>
+      </details>
 
-        <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--rule);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div class="lg-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
           <div style="font-size:13px;line-height:1.6;">
             <span id="nj-subtotal-wrap" style="display:none;">Subtotal: <strong id="nj-subtotal">₦0</strong> &nbsp;|&nbsp; Discount: <strong id="nj-discount-amt" class="flag">−₦0</strong> &nbsp;|&nbsp; </span>
             Total: <strong id="nj-total">₦0</strong> &nbsp;|&nbsp; Balance: <strong id="nj-balance" class="flag">₦0</strong>
@@ -2227,28 +2364,30 @@
 
     function renderItemRows(){
       const wrap = document.getElementById('nj-items');
+      // An item that already carries custom pricing shows it expanded — otherwise the
+      // figures would be invisible and easy to forget about.
+      draftItems.forEach(it=>{
+        if(it._descOpen === undefined) it._descOpen = !!((it.desc||'').trim() || Number(it.descQty)>0 || Number(it.descUnitPrice)>0);
+      });
       wrap.innerHTML = draftItems.map((it,idx)=>`
         <div class="item-row" data-idx="${idx}">
-          <div><label style="margin-top:0">Item name</label><input class="it-name" value="${esc(it.service)}" placeholder="type or pick from catalog \u2192"></div>
-          <div><label style="margin-top:0">Quick pick</label>
-            <select class="it-service">
-              <option value="">catalog\u2026</option>
-              ${options}
-            </select>
-          </div>
+          <div><label style="margin-top:0">Item</label><input class="it-name" list="nj-item-list" value="${esc(it.service)}" placeholder="type, or pick from your price list"></div>
           <div><label style="margin-top:0">Qty</label><input class="it-qty" type="number" min="0" value="${it.qty}"></div>
           <div><label style="margin-top:0">Unit</label><input class="it-unit" value="${esc(it.unit||'')}" placeholder="pc, sheet, hr..."></div>
           <div><label style="margin-top:0">Unit Price</label><input class="it-price" type="number" min="0" value="${it.unitPrice}"></div>
-          <div><label style="margin-top:0">Amount</label><input class="it-amt" type="text" value="${naira((Number(it.qty)||0)*(Number(it.unitPrice)||0))}" disabled></div>
+          <div><label style="margin-top:0">Amount</label><div class="it-amt readout">${naira((Number(it.qty)||0)*(Number(it.unitPrice)||0))}</div></div>
           <div><button class="lg-btn danger small it-remove" type="button" title="Remove">\u2715</button></div>
-          <div style="grid-column:1/-1;margin-top:6px;padding-top:8px;border-top:1px dashed var(--rule);">
+          <div style="grid-column:1/-1;">
+            <button type="button" class="subtle-link it-desc-toggle">${it._descOpen ? '− hide custom pricing' : '+ custom pricing'}</button>
+            <div class="it-desc-wrap"${it._descOpen ? '' : ' hidden'} style="margin-top:6px;padding-top:8px;border-top:1px dashed var(--rule);">
             <label style="margin-top:0;font-size:10.5px;">Custom Job Description <span style="text-transform:none;font-weight:400;color:var(--muted);">— for jobs where the price isn't a fixed catalog rate. Note what it covers and give it its own qty/unit/price; that amount is added to this line's total.</span></label>
             <div class="item-desc-row">
               <div><input class="it-desc" value="${esc(it.desc||'')}" placeholder="e.g. custom size 3x6ft banner, matte lamination, rush job"></div>
               <div><input class="it-desc-qty" type="number" min="0" value="${it.descQty||0}" placeholder="Qty"></div>
               <div><input class="it-desc-unit" value="${esc(it.descUnit||'')}" placeholder="Unit"></div>
               <div><input class="it-desc-price" type="number" min="0" value="${it.descUnitPrice||0}" placeholder="Unit Price"></div>
-              <div><input class="it-desc-amt" type="text" value="${naira((Number(it.descQty)||0)*(Number(it.descUnitPrice)||0))}" disabled></div>
+              <div><div class="it-desc-amt readout">${naira((Number(it.descQty)||0)*(Number(it.descUnitPrice)||0))}</div></div>
+            </div>
             </div>
           </div>
         </div>
@@ -2256,7 +2395,6 @@
       wrap.querySelectorAll('.item-row').forEach(row=>{
         const idx = Number(row.dataset.idx);
         const name = row.querySelector('.it-name');
-        const svc = row.querySelector('.it-service');
         const qty = row.querySelector('.it-qty');
         const unit = row.querySelector('.it-unit');
         const price = row.querySelector('.it-price');
@@ -2264,21 +2402,29 @@
         const descQty = row.querySelector('.it-desc-qty');
         const descUnit = row.querySelector('.it-desc-unit');
         const descPrice = row.querySelector('.it-desc-price');
-        name.addEventListener('input', ()=>{ draftItems[idx].service = name.value; });
+        // One box instead of a name field plus a separate "quick pick" dropdown: typing
+        // filters the price list via <datalist>, and choosing an entry fills in the
+        // price and unit for you. Typing a name that isn't on the list still works.
+        name.addEventListener('input', ()=>{
+          draftItems[idx].service = name.value;
+          const p = state.pricelist.find(pp=>normName(pp.name)===normName(name.value));
+          if(p){
+            draftItems[idx].category = p.category;
+            draftItems[idx].unitPrice = p.price;
+            price.value = p.price;
+            if(!draftItems[idx].unit && p.unit){ draftItems[idx].unit = p.unit; unit.value = p.unit; }
+            recalcTotals(); updateAmt(row, idx);
+          }
+        });
+        row.querySelector('.it-desc-toggle').addEventListener('click', ()=>{
+          draftItems[idx]._descOpen = !draftItems[idx]._descOpen;
+          renderItemRows();
+        });
         unit.addEventListener('input', ()=>{ draftItems[idx].unit = unit.value; });
         desc.addEventListener('input', ()=>{ draftItems[idx].desc = desc.value; });
         descQty.addEventListener('input', ()=>{ draftItems[idx].descQty = descQty.value; recalcTotals(); updateAmt(row, idx); });
         descUnit.addEventListener('input', ()=>{ draftItems[idx].descUnit = descUnit.value; });
         descPrice.addEventListener('input', ()=>{ draftItems[idx].descUnitPrice = descPrice.value; recalcTotals(); updateAmt(row, idx); });
-        svc.addEventListener('change', ()=>{
-          const opt = svc.selectedOptions[0];
-          const p = state.pricelist.find(pp=>pp.id===opt.value);
-          if(p){
-            draftItems[idx].service = p.name; draftItems[idx].category = p.category;
-            name.value = p.name; price.value = p.price; draftItems[idx].unitPrice = p.price;
-            recalcTotals(); updateAmt(row, idx); svc.value='';
-          }
-        });
         qty.addEventListener('input', ()=>{ draftItems[idx].qty = qty.value; recalcTotals(); updateAmt(row, idx); });
         price.addEventListener('input', ()=>{ draftItems[idx].unitPrice = price.value; recalcTotals(); updateAmt(row, idx); });
         row.querySelector('.it-remove').addEventListener('click', ()=>{
@@ -2286,9 +2432,11 @@
         });
       });
     }
+    // These are read-outs, not inputs — a disabled text box reads as something you're
+    // meant to fill in, so they render as plain text and are written via textContent.
     function updateAmt(row, idx){
-      row.querySelector('.it-amt').value = naira((Number(draftItems[idx].qty)||0)*(Number(draftItems[idx].unitPrice)||0));
-      row.querySelector('.it-desc-amt').value = naira((Number(draftItems[idx].descQty)||0)*(Number(draftItems[idx].descUnitPrice)||0));
+      row.querySelector('.it-amt').textContent = naira((Number(draftItems[idx].qty)||0)*(Number(draftItems[idx].unitPrice)||0));
+      row.querySelector('.it-desc-amt').textContent = naira((Number(draftItems[idx].descQty)||0)*(Number(draftItems[idx].descUnitPrice)||0));
     }
     function recalcTotals(){
       const rawTotal = draftItems.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unitPrice)||0)+(Number(it.descQty)||0)*(Number(it.descUnitPrice)||0),0);
@@ -4557,6 +4705,7 @@
     }
     markSaveStatus(true);
     setInterval(()=>autoSaveAll(), 5*60*1000);
+    startAlarmWatch();
   }
 
   // Entry point. Nothing is read or painted until Firebase tells us who (if anyone) is
