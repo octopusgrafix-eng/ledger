@@ -11,17 +11,33 @@ all in one self-contained `index.html`.
 Served by GitHub Pages from the `main` branch, root folder. No build step — Pages
 publishes `index.html` as-is, and it's free and unmetered because this repo is public.
 
-> The old `oktopusaccount.netlify.app` URL is **stale and must not be used**. That
-> Netlify account exceeded its credit allowance, so deploys are silently marked
-> *"Skipped due to account credit usage exceeded"* while the last successful build
-> keeps being served with HTTP 200 — it looks healthy but is frozen on a build that
-> predates the sign-in gate.
->
-> It is not a data leak: `firestore.rules` requires an authenticated uid, so that
-> build cannot read or write anything (verified — unauthenticated reads and writes
-> to the old shared `ledgerData/appState` path both return `403 PERMISSION_DENIED`).
-> It just shows an empty ledger throwing permission errors, which is confusing
-> rather than dangerous.
+### The Netlify mirror (currently frozen)
+
+`oktopusaccount.netlify.app` is the original URL. It is **kept, but temporarily
+out of date** — the Netlify account exceeded its credit allowance on 2026-08-04,
+so deploys are silently marked *"Skipped due to account credit usage exceeded"*
+while the last successful build (commit `a7dbe80`) keeps being served with
+HTTP 200. It looks healthy but is frozen on a build that predates the sign-in gate.
+
+**Use the GitHub Pages URL above until credits reset.**
+
+It is not a data leak: `firestore.rules` requires an authenticated uid, so that
+frozen build cannot read or write anything (verified — unauthenticated reads and
+writes to the old shared `ledgerData/appState` path both return
+`403 PERMISSION_DENIED`). It shows an empty ledger throwing permission errors,
+which is confusing rather than dangerous.
+
+**To revive it once credits reset:**
+
+1. Netlify → **Deploys** → **Trigger deploy** → *Deploy site*
+2. Confirm the new deploy says **Published**, not *Skipped*
+3. Load the site and check the sign-in screen appears — if you get straight into
+   a ledger with no login, you are still on the old cached build; hard-reload
+
+Both URLs then serve this same repo and the same Firestore data, so they stay in
+sync with each other automatically. The service worker registers relative to its
+own path, so it works correctly at the Netlify root and the Pages `/ledger/`
+subpath alike.
 
 ## Sign-in
 
