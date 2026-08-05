@@ -2314,11 +2314,15 @@
     content.innerHTML = `
       <div class="lg-card">
         <div class="lg-card-title">1 · Customer</div>
+        <datalist id="nj-customer-list">${state.customers.slice()
+          .sort((a,b)=>(b.lastDate||'').localeCompare(a.lastDate||''))
+          .map(c=>`<option value="${esc(c.name)}">${c.phone?esc(c.phone):''}</option>`).join('')}</datalist>
         <div class="lg-grid cols-3">
-          <div><label style="margin-top:0">Customer Name</label><input id="nj-customer" placeholder="e.g. WALKIN, OLIVER..."></div>
+          <div><label style="margin-top:0">Customer Name</label><input id="nj-customer" list="nj-customer-list" placeholder="type, or pick a saved customer"></div>
           <div><label style="margin-top:0">Phone (optional)</label><input id="nj-phone" placeholder="080..."></div>
           <div><label style="margin-top:0">Date Received</label><input id="nj-date" type="date" value="${todayISO()}"></div>
         </div>
+        <div class="readout" id="nj-customer-hint" style="font-size:11px;color:var(--muted);margin-top:6px;min-height:15px;"></div>
         <div class="lg-grid cols-2">
           <div><label>Promised / Due Date</label><input id="nj-due" type="date"></div>
           <div><label>Job Description / Notes</label><input id="nj-desc" placeholder="e.g. Rollup banner + design"></div>
