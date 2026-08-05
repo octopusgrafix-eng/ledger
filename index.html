@@ -2419,11 +2419,17 @@
     document.getElementById('jv-export').addEventListener('click', ()=>exportJobsCSV(filteredJobs(search.value), 'jobs'));
     renderJobsBody('');
   }
-  function filteredJobs(q){
+  function matchesJobQuery(j, q){
     q = (q||'').toUpperCase();
+    return !q || normName(j.customerName).includes(q) || (j.description||'').toUpperCase().includes(q);
+  }
+  // NOTE: this applies the Jobs tab's date filter, so it is only appropriate for the
+  // Jobs tab itself. Anything that needs to see jobs across all dates — Pending Jobs
+  // especially — must not go through here.
+  function filteredJobs(q){
     return state.jobs.filter(j => {
       if(jobsDateFilterOn && j.dateReceived !== jobsViewDate) return false;
-      return !q || normName(j.customerName).includes(q) || (j.description||'').toUpperCase().includes(q);
+      return matchesJobQuery(j, q);
     });
   }
   function renderJobsBody(q){
@@ -2599,7 +2605,13 @@
   // debounce the rebuild so it runs once after typing settles instead of per keystroke.
   let pendingSearchTimer = null, pendingSearchFocused = false, pendingSearchCaret = 0;
   function pendingJobsList(q){
-    return filteredJobs(q).filter(j=>j.status!=='DELIVERED').sort(byDueThenDate);
+    // Every job that isn't delivered yet, whatever day it came in on — work left
+    // unfinished yesterday is still outstanding today and has to roll over.
+    // Deliberately does NOT use filteredJobs(), whose date filter belongs to the
+    // Jobs tab and was previously hiding the entire backlog from this list.
+    return state.jobs
+      .filter(j => j.status!=='DELIVERED' && matchesJobQuery(j, q))
+      .sort(byDueThenDate);
   }
   function renderPending(){
     const jobs = pendingJobsList(pendingSearch);
