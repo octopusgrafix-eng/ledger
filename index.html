@@ -384,6 +384,55 @@
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
   function todayISO(){ return new Date().toISOString().slice(0,10); }
+  // ---------- stage timestamps (turnaround / efficiency) ----------
+  // Every status change records `at`, a full ISO instant, alongside the existing
+  // date-only `date` field which older code still reads. Jobs logged before this
+  // existed have no `at` at all — they are reported as "not timed" rather than
+  // guessed at, so an average is never quietly built on invented times.
+  function nowISO(){ return new Date().toISOString(); }
+  // Turns an ISO instant into the value a <input type="datetime-local"> expects,
+  // in LOCAL time — toISOString() would shift it by the timezone offset.
+  function toLocalInput(iso){
+    if(!iso) return '';
+    const d = new Date(iso);
+    if(isNaN(d)) return '';
+    const p = n=>String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function fmtDateTime(iso){
+    if(!iso) return '—';
+    const d = new Date(iso);
+    if(isNaN(d)) return '—';
+    return d.toLocaleDateString('en-NG',{day:'2-digit',month:'short'}) + ' ' +
+           d.toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'});
+  }
+  function fmtDuration(ms){
+    if(ms==null || !isFinite(ms)) return '—';
+    if(ms < 0) return '—';
+    const mins = Math.round(ms/60000);
+    if(mins < 60) return mins + 'm';
+    const h = Math.floor(mins/60), m = mins%60;
+    if(h < 24) return m ? `${h}h ${m}m` : `${h}h`;
+    const d = Math.floor(h/24), rh = h%24;
+    return rh ? `${d}d ${rh}h` : `${d}d`;
+  }
+  // First moment the job entered a given status.
+  function stageAt(j, status){
+    const hit = (j.history||[]).find(x=>x.status===status && x.at);
+    return hit ? hit.at : null;
+  }
+  // Production = intake through to the work being finished. Delivering implies it
+  // was ready, so a job taken straight to DELIVERED still counts as finished then.
+  function productionMs(j){
+    const start = stageAt(j,'RECEIVED');
+    if(!start) return null;
+    const readyish = (j.history||[])
+      .filter(x=>x.at && (x.status==='READY' || x.status==='DELIVERED'))
+      .map(x=>x.at).sort();
+    if(!readyish.length) return null;
+    const ms = new Date(readyish[0]) - new Date(start);
+    return isFinite(ms) && ms >= 0 ? ms : null;
+  }
   function fmtDate(iso){
     if(!iso) return '—';
     const d = new Date(iso+'T00:00:00');
@@ -1843,6 +1892,24 @@
       .concat(state.expenses.filter(e=>!e.method).map(e=>({kind:'ex', id:e.id, date:e.date, what:e.category, note:e.note, amount:Number(e.amount)||0})))
       .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
 
+    // ---- Production speed: intake through to the work being finished ----
+    // Scoped by when the job was FINISHED, so the month reflects work completed in it.
+    // Jobs missing either end of the pair are counted but kept out of the averages —
+    // an average built on half-known times would be worse than no average.
+    const timed = [];
+    let notTimed = 0;
+    state.jobs.forEach(j=>{
+      const done = (j.history||[]).filter(x=>x.status==='READY' || x.status==='DELIVERED');
+      if(!done.length) return;                                   // still in progress
+      const doneStamp = done.map(x=>x.at || x.date).sort()[0];
+      if(!doneStamp || !inMonth(doneStamp.slice(0,10))) return;   // finished another month
+      const ms = productionMs(j);
+      if(ms==null){ notTimed++; return; }
+      timed.push({job:j, ms});
+    });
+    timed.sort((a,b)=>a.ms-b.ms);
+    const avgMs = timed.length ? timed.reduce((s,x)=>s+x.ms,0)/timed.length : null;
+
     content.innerHTML = `
       <div class="lg-card">
         <div class="lg-card-title">Cash vs Bank Transfer, day by day — ${monthLabel}</div>
@@ -1913,6 +1980,33 @@
             </tr>
           </tbody>
         </table></div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Production Speed — ${monthLabel}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          How long the work itself took: from a job coming in to it being finished.
+          Counted on the day it was finished, and it deliberately ignores how long a
+          customer then took to collect — that isn't your speed.
+          ${notTimed>0 ? `<span class="flag">${notTimed} job${notTimed===1?'':'s'} finished this month can't be timed</span> — they were logged before stage times existed, or are missing one end. Open a job's <b>details</b> to fill the times in and it will join the average.` : ''}
+        </div>
+        ${!timed.length ? `<div class="lg-empty">No jobs with complete stage times finished this month yet.</div>` : `
+        <div class="lg-grid cols-4">
+          <div class="lg-card lg-kpi teal"><div class="num">${fmtDuration(avgMs)}</div><div class="lbl">Average Production Time</div></div>
+          <div class="lg-card lg-kpi paid"><div class="num">${fmtDuration(timed[0].ms)}</div><div class="lbl">Fastest</div></div>
+          <div class="lg-card lg-kpi debt"><div class="num">${fmtDuration(timed[timed.length-1].ms)}</div><div class="lbl">Slowest</div></div>
+          <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${timed.length}</div><div class="lbl">Jobs Timed</div></div>
+        </div>
+        <div style="overflow-x:auto;"><table>
+          <thead><tr><th>Customer</th><th>Job</th><th>Operator</th><th class="num-col">Production time</th></tr></thead>
+          <tbody>${timed.slice().reverse().slice(0,8).map(x=>`<tr>
+            <td>${esc(x.job.customerName)}</td>
+            <td class="muted">${esc(x.job.description || ((x.job.items||[])[0]||{}).service || '—')}</td>
+            <td class="muted">${esc(x.job.operator)||'—'}</td>
+            <td class="num-col" style="${x.ms>avgMs?'color:var(--clay);font-weight:600;':''}">${fmtDuration(x.ms)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:6px;">Slowest first — anything above the ${fmtDuration(avgMs)} average is highlighted.</div>`}
       </div>
 
       ${!unrecorded.length ? '' : `
@@ -2345,7 +2439,13 @@
         operator: document.getElementById('nj-operator').value.trim(),
         dueDate: document.getElementById('nj-due').value || '',
         status: document.getElementById('nj-status').value,
-        history: [{status: document.getElementById('nj-status').value, date: todayISO()}],
+        // Only stamp a real time when the job is being logged on the day it came in.
+        // Backdated backlog entries get the date but no time, because the actual
+        // hour it arrived isn't known — it can be filled in on the job's details.
+        history: [Object.assign(
+          {status: document.getElementById('nj-status').value, date: dateReceived || todayISO()},
+          (dateReceived === todayISO() || !dateReceived) ? {at: nowISO()} : {}
+        )],
       };
       state.jobs.push(job);
       recomputeAllCustomers();
@@ -2475,6 +2575,34 @@
           <input type="checkbox" class="guide-chk" data-id="${j.id}" data-idx="${i}" style="width:auto;margin-top:2px;" ${checked[i]?'checked':''}>
           <span>${esc(g)}</span>
         </label>`).join('')}
+      ${renderStageTimes(j)}
+    </div>`;
+  }
+  // The stage trail, with each recorded moment editable. A job marked DELIVERED the
+  // morning after it actually went out would otherwise be recorded as slower than it
+  // was, and there would be no way to put it right.
+  function renderStageTimes(j){
+    const hist = j.history || [];
+    const prod = productionMs(j);
+    const reached = STATUSES.filter(s => hist.some(x=>x.status===s));
+    if(!reached.length) return '';
+    return `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--rule);">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">
+        Stage times
+        ${prod!=null
+          ? `<span style="color:var(--teal);font-weight:600;letter-spacing:0;text-transform:none;">&nbsp;· production took ${fmtDuration(prod)}</span>`
+          : `<span class="muted" style="letter-spacing:0;text-transform:none;">&nbsp;· not timed</span>`}
+      </div>
+      ${reached.map(s=>{
+        const entry = hist.find(x=>x.status===s) || {};
+        return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap;">
+          <span style="font-size:11.5px;min-width:104px;">${s}</span>
+          <input type="datetime-local" class="stage-at" data-id="${j.id}" data-status="${s}"
+                 value="${toLocalInput(entry.at)}"
+                 style="width:auto;font-size:11.5px;padding:3px 5px;">
+          ${!entry.at ? `<span class="muted" style="font-size:11px;">no time recorded${entry.date?` — logged ${fmtDate(entry.date)}`:''}</span>` : ''}
+        </div>`;
+      }).join('')}
     </div>`;
   }
   function renderJobCard(j){
@@ -2669,7 +2797,7 @@
         if(!j) return;
         j.status = sel.value;
         j.history = j.history||[];
-        j.history.push({status:sel.value, date: todayISO()});
+        j.history.push({status:sel.value, date: todayISO(), at: nowISO()});
         await save('jobs');
         toast(j.customerName + ' → ' + sel.value);
         reRender();
@@ -2695,6 +2823,26 @@
     document.querySelectorAll('.job-guide-toggle').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         openGuideId = (openGuideId===btn.dataset.id) ? null : btn.dataset.id;
+        reRender();
+      });
+    });
+    document.querySelectorAll('.stage-at').forEach(inp=>{
+      inp.addEventListener('change', async ()=>{
+        const j = state.jobs.find(x=>x.id===inp.dataset.id);
+        if(!j) return;
+        const entry = (j.history||[]).find(x=>x.status===inp.dataset.status);
+        if(!entry) return;
+        if(!inp.value){
+          delete entry.at;                       // cleared — back to "not timed"
+        }else{
+          const d = new Date(inp.value);         // datetime-local parses as local time
+          if(isNaN(d)){ toast('That date and time could not be read'); return; }
+          entry.at = d.toISOString();
+          entry.date = entry.at.slice(0,10);     // keep the date field consistent
+        }
+        await save('jobs');
+        const prod = productionMs(j);
+        toast(prod!=null ? ('Updated — production took ' + fmtDuration(prod)) : 'Time updated');
         reRender();
       });
     });
@@ -4180,7 +4328,7 @@
           operator: q.operator || '',
           dueDate: q.dueDate || '',
           status: 'RECEIVED',
-          history: [{status:'RECEIVED', date: todayISO()}],
+          history: [{status:'RECEIVED', date: todayISO(), at: nowISO()}],
           fromQuote: q.id,
         };
         state.jobs.push(job);
