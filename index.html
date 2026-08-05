@@ -3388,7 +3388,8 @@
           <th class="num-col">Old Debt Set</th><th class="num-col">Old Debt Left</th><th class="num-col">Total Debt</th><th>Last Job</th><th></th>
         </tr></thead><tbody>
         ${rows.map(c=>`<tr data-name="${esc(c.name)}">
-          <td>${esc(c.name)}</td><td class="muted">${esc(c.phone)||'—'}</td>
+          <td>${esc(c.name)}</td>
+          <td><input type="tel" class="cu-phone-edit" data-name="${esc(c.name)}" value="${esc(c.phone)}" placeholder="080…" style="width:118px;" title="Add or correct this customer's number — for when it wasn't collected at intake"></td>
           <td class="num-col">${c.jobCount}</td>
           <td class="num-col">${naira(c.totalBilled)}</td>
           <td class="num-col">${naira(c.totalPaid)}</td>
@@ -3427,6 +3428,34 @@
         c.openingDebt = Number(inp.value)||0;
         await save('customers');
         toast('Old debt updated for ' + c.name);
+        renderCustomers();
+      });
+    });
+    // Add or correct a phone here when it wasn't collected at intake.
+    //
+    // The number is written to the customer AND to every job of theirs, because
+    // recomputeAllCustomers() lets a phone stored on a job overwrite the roster one —
+    // editing the customer alone would silently revert the moment anything recomputed.
+    // Writing through also fixes the WhatsApp "notify" links, which read the job's copy.
+    content.querySelectorAll('.cu-phone-edit').forEach(inp=>{
+      inp.addEventListener('change', async ()=>{
+        const name = inp.dataset.name;
+        const c = state.customers.find(c=>c.name===name);
+        if(!c) return;
+        const phone = inp.value.trim();
+        if(phone === (c.phone||'')) return;          // nothing changed
+        c.phone = phone;
+        let touched = 0;
+        state.jobs.forEach(j=>{
+          if(normName(j.customerName) !== normName(name)) return;
+          if((j.phone||'') === phone) return;
+          j.phone = phone;
+          touched++;
+        });
+        await saveMany(touched ? ['customers','jobs'] : ['customers']);
+        toast(phone
+          ? `Phone saved for ${name}${touched ? ` — also updated on ${touched} job${touched===1?'':'s'}` : ''}`
+          : `Phone cleared for ${name}`);
         renderCustomers();
       });
     });
