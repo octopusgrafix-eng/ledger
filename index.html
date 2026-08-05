@@ -1777,6 +1777,64 @@
       ? `<td class="num-col flag">${naira(v)}</td>`
       : `<td class="num-col muted">—</td>`;
 
+    // Same cash/transfer figures, but keyed by day so the month can be read as a
+    // running record rather than a single lump.
+    const methodByDay = {};
+    for(let d=1; d<=nDays; d++) methodByDay[dateFor(d)] = {inCash:0, inTransfer:0, outCash:0, outTransfer:0, outUnknown:0};
+    state.jobs.forEach(j=>(j.payments||[]).forEach(p=>{
+      const m = methodByDay[p.date]; if(!m) return;
+      m.inCash += Number(p.cash)||0; m.inTransfer += Number(p.bank)||0;
+    }));
+    allOldDebtPayments().forEach(p=>{
+      const m = methodByDay[p.date]; if(!m) return;
+      m.inCash += p.cash; m.inTransfer += p.bank;
+    });
+    state.cpspend.concat(state.expenses).forEach(e=>{
+      const m = methodByDay[e.date]; if(!m) return;
+      const a = Number(e.amount)||0;
+      if(e.method==='cash') m.outCash += a;
+      else if(e.method==='transfer') m.outTransfer += a;
+      else m.outUnknown += a;
+    });
+    const showUnknownCol = outUnknown > 0;
+    const methodCols = showUnknownCol ? 8 : 7;
+
+    function buildMethodDayTable(){
+      let html=''; let wk=null; let wkHasData=false;
+      let acc={inCash:0,inTransfer:0,outCash:0,outTransfer:0,outUnknown:0};
+      const cells = (m, bold) => {
+        const netCash = m.inCash - m.outCash, netTr = m.inTransfer - m.outTransfer;
+        return `<td class="num-col">${m.inCash?naira(m.inCash):'—'}</td>
+          <td class="num-col">${m.outCash?naira(m.outCash):'—'}</td>
+          <td class="num-col" style="${bold?'':'font-weight:600;'}color:${netCash<0?'var(--clay)':'var(--green)'};">${naira(netCash)}</td>
+          <td class="num-col">${m.inTransfer?naira(m.inTransfer):'—'}</td>
+          <td class="num-col">${m.outTransfer?naira(m.outTransfer):'—'}</td>
+          <td class="num-col" style="${bold?'':'font-weight:600;'}color:${netTr<0?'var(--clay)':'var(--teal)'};">${naira(netTr)}</td>
+          ${showUnknownCol ? `<td class="num-col ${m.outUnknown?'flag':'muted'}">${m.outUnknown?naira(m.outUnknown):'—'}</td>` : ''}`;
+      };
+      function flush(){
+        if(wk===null || !wkHasData) return '';
+        return `<tr style="font-weight:700;background:rgba(46,101,95,0.08);">
+          <td>${wk} TOTAL</td>${cells(acc, true)}
+        </tr>`;
+      }
+      rows.forEach(r=>{
+        const m = methodByDay[r.date];
+        const active = m.inCash || m.inTransfer || m.outCash || m.outTransfer || m.outUnknown;
+        if(wk!==null && r.week!==wk){ html += flush(); acc={inCash:0,inTransfer:0,outCash:0,outTransfer:0,outUnknown:0}; wkHasData=false; }
+        wk = r.week;
+        if(active){
+          wkHasData = true;
+          html += `<tr><td>${r.d}</td>${cells(m)}</tr>`;
+        }
+        acc.inCash+=m.inCash; acc.inTransfer+=m.inTransfer;
+        acc.outCash+=m.outCash; acc.outTransfer+=m.outTransfer; acc.outUnknown+=m.outUnknown;
+      });
+      html += flush();
+      return html || `<tr><td colspan="${methodCols}" class="lg-empty">Nothing moved in or out yet this month</td></tr>`;
+    }
+    const methodDayRows = buildMethodDayTable();
+
     // Everything still missing a method, across ALL dates and both kinds of spending.
     // Without this you would have to page through the CP Account and Expenses tabs one
     // day at a time hunting for entries logged before the field existed.
@@ -1787,12 +1845,42 @@
 
     content.innerHTML = `
       <div class="lg-card">
-        <div class="lg-card-title">Cash vs Bank Transfer — ${monthLabel}</div>
+        <div class="lg-card-title">Cash vs Bank Transfer, day by day — ${monthLabel}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
-          Exactly how much moved as physical cash and how much moved through the bank.
-          <b>Net</b> is what each should have gained this month — use it to check the cash box against the bank balance.
-          ${outUnknown>0 ? `<span class="flag">${naira(outUnknown)} of spending has no method recorded yet</span> — set it on the CP Account and Expenses tabs and it will move into the right column.` : ''}
+          Exactly how much moved as physical cash and how much moved through the bank, each day.
+          <b>Net</b> is what the cash box and the bank should each have gained that day — days with no movement are skipped.
+          ${outUnknown>0 ? `<span class="flag">${naira(outUnknown)} of spending has no method recorded yet</span> — set it in the card below and it will move into the right column.` : ''}
         </div>
+        <div style="overflow-x:auto;"><table>
+          <thead>
+            <tr>
+              <th></th>
+              <th colspan="3" style="text-align:center;border-bottom:1px solid var(--rule);">Cash</th>
+              <th colspan="3" style="text-align:center;border-bottom:1px solid var(--rule);">Bank Transfer</th>
+              ${showUnknownCol ? '<th></th>' : ''}
+            </tr>
+            <tr>
+              <th>Day</th>
+              <th class="num-col">In</th><th class="num-col">Out</th><th class="num-col">Net</th>
+              <th class="num-col">In</th><th class="num-col">Out</th><th class="num-col">Net</th>
+              ${showUnknownCol ? '<th class="num-col">Out, method<br>not recorded</th>' : ''}
+            </tr>
+          </thead>
+          <tbody>${methodDayRows}
+            <tr style="font-weight:700;border-top:2px solid var(--ink);">
+              <td>MONTH</td>
+              <td class="num-col">${naira(inSplit.cash)}</td>
+              <td class="num-col">${naira(cpSplit.cash + exSplit.cash)}</td>
+              <td class="num-col" style="color:${netCashMethod<0?'var(--clay)':'var(--green)'};">${naira(netCashMethod)}</td>
+              <td class="num-col">${naira(inSplit.transfer)}</td>
+              <td class="num-col">${naira(cpSplit.transfer + exSplit.transfer)}</td>
+              <td class="num-col" style="color:${netTransferMethod<0?'var(--clay)':'var(--teal)'};">${naira(netTransferMethod)}</td>
+              ${showUnknownCol ? `<td class="num-col flag">${naira(outUnknown)}</td>` : ''}
+            </tr>
+          </tbody>
+        </table></div>
+
+        <div class="lg-card-title" style="margin-top:18px;">Month total, split by where it went</div>
         <div style="overflow-x:auto;"><table>
           <thead><tr>
             <th></th>
