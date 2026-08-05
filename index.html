@@ -318,8 +318,9 @@
 
 <script>
 (function(){
+  // Daily View leads and is the landing tab — it's the day-to-day working screen.
+  // Dashboard is the month-at-a-glance overview, so it sits at the end.
   const TABS = [
-    {id:'dashboard', label:'Dashboard'},
     {id:'dayview', label:'Daily View'},
     {id:'summary', label:'Summary'},
     {id:'newjob', label:'New Job'},
@@ -333,6 +334,7 @@
     {id:'inventory', label:'Inventory'},
     {id:'expenses', label:'Expenses'},
     {id:'cpaccount', label:'CP Account'},
+    {id:'dashboard', label:'Dashboard'},
   ];
   const STATUSES = ['RECEIVED','IN PRODUCTION','READY','DELIVERED'];
   const STATUS_CLASS = {'RECEIVED':'received','IN PRODUCTION':'production','READY':'ready','DELIVERED':'delivered'};
@@ -370,7 +372,7 @@
     quotes: [],
     recurring: [],
     settings: {tithePct:10, pfPct:65, exPct:25, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''},
-    tab: 'dashboard',
+    tab: 'dayview',
     loaded: false,
   };
 
@@ -904,7 +906,7 @@
     state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: ''});
     await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings']);
     toast('All data cleared — starting fresh');
-    state.tab = 'dashboard';
+    state.tab = 'dayview';
     renderAll();
   }
   function defaultPriceList(){
