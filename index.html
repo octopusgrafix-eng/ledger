@@ -1696,13 +1696,15 @@
     const dateFor = d => `${year}-${pad(month+1)}-${pad(d)}`;
     const today = todayISO();
 
-    const paidByDay = {}, cpByDay = {}, matUsedByDay = {};
-    for(let d=1; d<=nDays; d++){ const k=dateFor(d); paidByDay[k]=0; cpByDay[k]=0; matUsedByDay[k]=0; }
+    const paidByDay = {}, cpByDay = {}, matUsedByDay = {}, matWasteByDay = {};
+    for(let d=1; d<=nDays; d++){ const k=dateFor(d); paidByDay[k]=0; cpByDay[k]=0; matUsedByDay[k]=0; matWasteByDay[k]=0; }
     state.jobs.forEach(j=>{
       (j.payments||[]).forEach(p=>{ if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += (Number(p.cash)||0)+(Number(p.bank)||0); });
       if(j.dateReceived && cpByDay.hasOwnProperty(j.dateReceived)){
+        const t = jobTotals(j);
         cpByDay[j.dateReceived] += Number(j.cp)||0;
-        matUsedByDay[j.dateReceived] += jobTotals(j).materialUsedCost;
+        matUsedByDay[j.dateReceived] += t.materialUsedCost;
+        matWasteByDay[j.dateReceived] += t.materialWasteCost;
       }
     });
     allOldDebtPayments().forEach(p=>{ if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += p.cash+p.bank; });
@@ -1717,7 +1719,9 @@
     let workDaysTotal=0, workDaysSoFar=0, weekWorkDays=0;
     for(let d=1; d<=nDays; d++){
       const date = dateFor(d);
-      const net = Math.max(paidByDay[date] - cpByDay[date] - matUsedByDay[date], 0);
+      // Same Net Profit formula as dayStats(), monthStats() and the Summary day table — all four
+      // must stay in step, or the target card reports progress against a figure the Summary denies.
+      const net = Math.max(paidByDay[date] - cpByDay[date] - matUsedByDay[date] - matWasteByDay[date], 0);
       const val = net * sharePct/100;
       const work = isWorkDay(date);
       if(work) workDaysTotal++;

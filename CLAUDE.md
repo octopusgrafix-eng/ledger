@@ -70,8 +70,9 @@ wasted. **Buying stock is not in that formula and never has been** — restockin
 is funded by the material purse, which collects the used + wasted charged onto
 each job. Stock purchases do reduce Net Cash, which is a cash-movement figure,
 not profit. Tithe/PF/EX are split off Net Profit, so anything that changes it
-changes the split: `dayStats()`, `monthStats()` and the Summary day table all
-compute it separately and must stay in step.
+changes the split: `dayStats()`, `monthStats()`, `targetStats()` and the Summary
+day table all compute it separately and must stay in step. Four copies of one
+formula; two of them have already drifted once.
 
 ## Conventions that have held
 
@@ -91,9 +92,11 @@ presses get 140ms; repeated actions get nothing.
 
 - **Netlify (`oktopusaccount.netlify.app`) is frozen** on a pre-sign-in build,
   out of credits. Kept deliberately. Revival steps are in the README.
-- **The monthly target is set to 0** — the owner still needs to enter their real
-  figure on the Summary tab. Basis defaults to PF (65%); they never confirmed
-  whether they wanted PF or whole net profit, so that may need switching.
+- **The monthly target is ₦8,450,000 on the PF basis**, set 6 Aug 2026. It encodes
+  "₦500,000 of net profit per working day": 26 working days × ₦500k = ₦13m net,
+  × 65% = ₦8.45m. Because the app divides by the *current* month's working days
+  (24–27 across 2026), a fixed target drifts the daily figure — ₦8.45m is ₦500k/day
+  in August but ₦521k in February. Revisit if they want exactly ₦500k every month.
 - **Stage timestamps only exist going forward.** Jobs predating the feature can't
   be timed; production-speed averages stay empty until new jobs flow through.
 - **Untested write paths**: saving a corrected stage time, saving a customer
