@@ -301,6 +301,29 @@
   }
   @media (prefers-reduced-motion: reduce){ .lg-alarm .al-dot{animation:none;} }
 
+  /* ---- Monthly target ---- */
+  .lg-target{border-left:3px solid var(--ok-blue);}
+  .lg-target .tg-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;}
+  .lg-target .tg-big{font-size:23px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .lg-target .tg-of{font-size:13px;font-weight:400;color:var(--muted);}
+  .lg-target .tg-pct{font-family:var(--font-slab);font-size:19px;font-weight:700;color:var(--ok-deep);}
+  .lg-target .tg-bar{
+    height:9px;border-radius:5px;background:var(--paper-deep);
+    border:1px solid var(--rule);margin-top:8px;overflow:hidden;
+  }
+  .lg-target .tg-bar > span{
+    display:block;height:100%;
+    background:linear-gradient(90deg,var(--ok-deep),var(--ok-bright));
+    /* Grows to the new figure rather than jumping, so recording a payment reads as
+       progress being made. Width is safe to animate here — one bar, nothing laid out
+       around it that a reflow would disturb. */
+    transition:width 520ms var(--ease-out);
+  }
+  .lg-target .tg-pace{font-size:12px;margin-top:7px;}
+  .lg-target .tg-pace.ok{color:var(--green);}
+  .lg-target .tg-pace.behind{color:var(--clay);}
+  @media (prefers-reduced-motion: reduce){ .lg-target .tg-bar > span{transition:none;} }
+
   /* ---- Motion ----
      Budgeted by how often a thing is seen. The sign-in screen happens once per
      device, so it can afford a staged entrance. Tab content is seen dozens of
@@ -523,7 +546,7 @@
     exadjust: [],
     quotes: [],
     recurring: [],
-    settings: {tithePct:10, pfPct:65, exPct:25, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''},
+    settings: {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''},
     tab: 'dayview',
     loaded: false,
   };
@@ -713,7 +736,7 @@
   // whole ledger to the network every 5 minutes.
   const lastPersisted = Object.create(null);
   const STORAGE_KEYS = [['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
-  const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''};
+  const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
     // instead of eleven. The document is the signed-in user's uid, which is what the
@@ -1070,7 +1093,9 @@
     state.exadjust = d.exadjust || [];
     state.quotes = d.quotes || [];
     state.recurring = d.recurring || [];
-    state.settings = Object.assign({tithePct:10,pfPct:65,exPct:25,shopName:'YOUR BUSINESS NAME',shopPhone:'',shopAddress:'',receiptCounter:0,cpOpeningFloat:0,cpStartDate:'',exOpeningFloat:0,exStartDate:''}, d.settings || {});
+    // Restoring from a backup taken before a setting existed must still land on the
+    // current defaults, so this derives from DEFAULT_SETTINGS rather than repeating it.
+    state.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
     await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings'].map(save));
     toast('Backup restored');
     renderAll();
@@ -1646,6 +1671,108 @@
     tick();
   }
 
+  // ---------- monthly target ----------
+  // The target is measured against the same net profit the Split card divides up —
+  // cash collected, less cost of production, less the material actually used — so the
+  // number here can never disagree with the number on the Summary tab.
+  //
+  // By default only the PF share counts toward it (the 65%), since that is the part
+  // the target is about. Switch targetBasis to 'net' to count the whole net profit.
+  function targetStats(){
+    const s = state.settings;
+    const target = Number(s.monthlyTarget)||0;
+    const now = new Date();
+    const year = now.getFullYear(), month = now.getMonth();
+    const nDays = daysInMonth(year, month);
+    const pad = n=>String(n).padStart(2,'0');
+    const dateFor = d => `${year}-${pad(month+1)}-${pad(d)}`;
+    const today = todayISO();
+
+    const paidByDay = {}, cpByDay = {}, matUsedByDay = {};
+    for(let d=1; d<=nDays; d++){ const k=dateFor(d); paidByDay[k]=0; cpByDay[k]=0; matUsedByDay[k]=0; }
+    state.jobs.forEach(j=>{
+      (j.payments||[]).forEach(p=>{ if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += (Number(p.cash)||0)+(Number(p.bank)||0); });
+      if(j.dateReceived && cpByDay.hasOwnProperty(j.dateReceived)){
+        cpByDay[j.dateReceived] += Number(j.cp)||0;
+        matUsedByDay[j.dateReceived] += jobTotals(j).materialUsedCost;
+      }
+    });
+    allOldDebtPayments().forEach(p=>{ if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += p.cash+p.bank; });
+
+    const sharePct = (s.targetBasis === 'net') ? 100 : (Number(s.pfPct)||0);
+    // A target divided by 31 when the shop shuts on Sundays sets a daily number that
+    // can't be hit, so rest days are excluded from the divisor.
+    const isWorkDay = iso => s.targetWorksSundays || new Date(iso+'T00:00:00').getDay() !== 0;
+    const thisWeek = isoWeekLabel(today);
+
+    let achieved=0, weekAchieved=0, todayAchieved=0;
+    let workDaysTotal=0, workDaysSoFar=0, weekWorkDays=0;
+    for(let d=1; d<=nDays; d++){
+      const date = dateFor(d);
+      const net = Math.max(paidByDay[date] - cpByDay[date] - matUsedByDay[date], 0);
+      const val = net * sharePct/100;
+      const work = isWorkDay(date);
+      if(work) workDaysTotal++;
+      if(work && isoWeekLabel(date)===thisWeek) weekWorkDays++;
+      if(date <= today){
+        achieved += val;
+        if(work) workDaysSoFar++;
+        if(isoWeekLabel(date)===thisWeek) weekAchieved += val;
+        if(date === today) todayAchieved = val;
+      }
+    }
+
+    const dailyTarget  = workDaysTotal ? target/workDaysTotal : 0;
+    const weeklyTarget = dailyTarget * weekWorkDays;
+    const expected     = dailyTarget * workDaysSoFar;   // where you should stand by tonight
+    const remaining    = Math.max(target - achieved, 0);
+    const daysLeft     = Math.max(workDaysTotal - workDaysSoFar, 0);
+    return {
+      target, achieved, remaining,
+      pct: target ? Math.min(achieved/target, 1) : 0,
+      dailyTarget, weeklyTarget, weekAchieved, todayAchieved,
+      expected, pace: achieved - expected,
+      workDaysTotal, workDaysSoFar, daysLeft,
+      // What each remaining day has to bring in to still finish on target. Recomputed
+      // daily, so getting ahead lowers it and falling behind raises it.
+      neededPerDay: daysLeft>0 ? remaining/daysLeft : remaining,
+      basisLabel: s.targetBasis==='net' ? 'net profit' : `PF (${Number(s.pfPct)||0}%)`,
+      monthLabel: now.toLocaleDateString('en-NG',{month:'long', year:'numeric'})
+    };
+  }
+
+  function renderTargetCard(){
+    const t = targetStats();
+    if(!t.target){
+      return `<div class="lg-card lg-target">
+        <div class="lg-card-title">Monthly Target</div>
+        <div style="font-size:12.5px;color:var(--muted);">
+          No target set. Add one on the <b>Summary</b> tab and this shows what you need
+          each week and each day to reach it.
+        </div>
+      </div>`;
+    }
+    const ahead = t.pace >= 0;
+    return `<div class="lg-card lg-target">
+      <div class="lg-card-title">Monthly Target — ${t.monthLabel} <span class="muted" style="text-transform:none;letter-spacing:0;">· counting ${t.basisLabel}</span></div>
+      <div class="tg-head">
+        <div class="tg-big">${naira(t.achieved)} <span class="tg-of">of ${naira(t.target)}</span></div>
+        <div class="tg-pct">${Math.round(t.pct*100)}%</div>
+      </div>
+      <div class="tg-bar"><span style="width:${(t.pct*100).toFixed(1)}%"></span></div>
+      <div class="tg-pace ${ahead?'ok':'behind'}">
+        ${ahead
+          ? `Ahead by ${naira(t.pace)} — you should be at ${naira(t.expected)} by tonight`
+          : `Behind by ${naira(Math.abs(t.pace))} — you should be at ${naira(t.expected)} by tonight`}
+      </div>
+      <div class="lg-grid cols-3" style="margin-top:12px;">
+        <div class="lg-kpi teal"><div class="num">${naira(t.weekAchieved)}</div><div class="lbl">This week of ${naira(t.weeklyTarget)}</div></div>
+        <div class="lg-kpi paid"><div class="num">${naira(t.todayAchieved)}</div><div class="lbl">Today of ${naira(t.dailyTarget)}</div></div>
+        <div class="lg-kpi" style="border-left-color:var(--ok-blue);"><div class="num">${naira(t.neededPerDay)}</div><div class="lbl">Needed / day · ${t.daysLeft} day${t.daysLeft===1?'':'s'} left</div></div>
+      </div>
+    </div>`;
+  }
+
   // ---------- render shell ----------
   function renderTabs(){
     tabsEl.innerHTML = TABS.map(t=>`<button class="lg-tab ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}</button>`).join('');
@@ -1829,6 +1956,7 @@
   function renderDayView(){
     const d = dayStats(dayViewDate);
     content.innerHTML = `
+      ${renderTargetCard()}
       <div class="lg-card">
         <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
           <div><label style="margin-top:0">Date</label><input id="dv-date" type="date" value="${dayViewDate}"></div>
@@ -2314,6 +2442,30 @@
         <div style="margin-top:10px;"><button class="lg-btn ghost small" id="sm-save-split">Save Split</button></div>
       </div>
 
+      <div class="lg-card">
+        <div class="lg-card-title">Monthly Target</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          What you're aiming to make this month. It's split into a weekly and a daily
+          number for you, and shown on the Daily View so you see it every morning.
+        </div>
+        <div class="lg-grid cols-3">
+          <div><label style="margin-top:0">Target for the month (₦)</label><input id="sm-target" type="number" min="0" value="${Number(s.monthlyTarget)||0}"></div>
+          <div><label style="margin-top:0">Count towards it</label>
+            <select id="sm-target-basis">
+              <option value="pf"${s.targetBasis!=='net'?' selected':''}>PF only — your ${Number(s.pfPct)||0}% share</option>
+              <option value="net"${s.targetBasis==='net'?' selected':''}>The whole net profit</option>
+            </select>
+          </div>
+          <div><label style="margin-top:0">Working days</label>
+            <select id="sm-target-sundays">
+              <option value="no"${!s.targetWorksSundays?' selected':''}>Mon–Sat (closed Sunday)</option>
+              <option value="yes"${s.targetWorksSundays?' selected':''}>Every day, including Sunday</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:10px;"><button class="lg-btn ghost small" id="sm-save-target" type="button">Save Target</button></div>
+      </div>
+
       <div class="lg-grid cols-3">
         <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600">${(collectionRate*100).toFixed(1)}%</div></div>
         <div class="lg-card"><div class="lg-card-title">Debt as % of Billing</div><div style="font-size:20px;font-weight:600">${(debtPct*100).toFixed(1)}%</div></div>
@@ -2414,6 +2566,16 @@
       state.settings.exPct = Number(document.getElementById('sm-ex').value)||0;
       await save('settings');
       toast('Split settings saved');
+      renderSummary();
+    });
+    document.getElementById('sm-save-target').addEventListener('click', async ()=>{
+      const t = Number(document.getElementById('sm-target').value)||0;
+      state.settings.monthlyTarget = t;
+      state.settings.targetBasis = document.getElementById('sm-target-basis').value;
+      state.settings.targetWorksSundays = document.getElementById('sm-target-sundays').value === 'yes';
+      await save('settings');
+      const st = targetStats();
+      toast(t ? `Target set — ${naira(st.dailyTarget)} a day over ${st.workDaysTotal} working days` : 'Target cleared');
       renderSummary();
     });
   }
