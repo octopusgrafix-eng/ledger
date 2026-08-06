@@ -558,7 +558,14 @@
   const clockEl = document.getElementById('lg-clock');
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
-  function todayISO(){ return new Date().toISOString().slice(0,10); }
+  // Local calendar date as YYYY-MM-DD. Never go via toISOString() — that converts to UTC, and
+  // west of it (Nigeria is UTC+1) local midnight falls on the previous UTC day, so "today"
+  // reads as yesterday until 1am and every date shift lands a day short.
+  function isoOf(d){
+    const pad = x=>String(x).padStart(2,'0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  }
+  function todayISO(){ return isoOf(new Date()); }
   // ---------- stage timestamps (turnaround / efficiency) ----------
   // Every status change records `at`, a full ISO instant, alongside the existing
   // date-only `date` field which older code still reads. Jobs logged before this
@@ -1186,10 +1193,11 @@
     const debt = Math.max(totalBilled - totalPaid, 0);
     const credit = Math.max(totalPaid - totalBilled, 0);
     const cp = Number(job.cp)||0;
-    // materialUsedCost is informational only (what the material used on this job would cost at
-    // today's price) — it no longer reduces this job's profit. "Material Cost" as a business
-    // expense is now tracked when you actually BUY stock (see the Stock Purchase Log), and is
-    // deducted at the day/month level alongside Expenses, not attributed to individual jobs.
+    // materialUsedCost / materialWasteCost value the material this job consumed and spoiled at
+    // today's price. They don't reduce THIS job's `profit` (which stays billed - cp), but both are
+    // deducted at the day/month level to give Net Profit — see dayStats(), monthStats() and the
+    // Summary day table. Money spent BUYING stock is a separate figure (materialPurchaseCost*),
+    // tracked on the date cash left the till and never deducted from Net Profit.
     const materialUsedCost = jobMaterialsList(job).reduce((s,m)=>s+(Number(m.qty)||0)*(Number(m.unitCost)||0), 0);
     const materialWasteCost = jobMaterialsList(job).reduce((s,m)=>s+(Number(m.waste)||0)*(Number(m.unitCost)||0), 0);
     const profit = totalBilled - cp;
@@ -1912,7 +1920,7 @@
   // ---------- DAILY VIEW (full income & jobs for one day) ----------
   let dayViewDate = todayISO();
   function shiftDate(iso, delta){
-    const d = new Date(iso+'T00:00:00'); d.setDate(d.getDate()+delta); return d.toISOString().slice(0,10);
+    const d = new Date(iso+'T00:00:00'); d.setDate(d.getDate()+delta); return isoOf(d);
   }
   function dayStats(dateStr){
     recomputeAllCustomers();
@@ -2062,13 +2070,14 @@
     });
 
     // Cost of production keyed by job intake date; material cost (bought) keyed by purchase date;
-    // material cost (used) also keyed by job intake date, kept as a separate informational figure
-    const cpByDay = {}, matCostByDay = {}, matCostUsedByDay = {};
-    for(let d=1; d<=nDays; d++){ cpByDay[dateFor(d)] = 0; matCostByDay[dateFor(d)] = 0; matCostUsedByDay[dateFor(d)] = 0; }
+    // material cost (used) and (wasted) also keyed by job intake date — both come out of Net Profit
+    const cpByDay = {}, matCostByDay = {}, matCostUsedByDay = {}, matWasteByDay = {};
+    for(let d=1; d<=nDays; d++){ cpByDay[dateFor(d)] = 0; matCostByDay[dateFor(d)] = 0; matCostUsedByDay[dateFor(d)] = 0; matWasteByDay[dateFor(d)] = 0; }
     state.jobs.forEach(j=>{
       if(!j.dateReceived || !cpByDay.hasOwnProperty(j.dateReceived)) return;
       cpByDay[j.dateReceived] += Number(j.cp)||0;
       matCostUsedByDay[j.dateReceived] += jobTotals(j).materialUsedCost;
+      matWasteByDay[j.dateReceived] += jobTotals(j).materialWasteCost;
     });
     allStockPurchases().forEach(p=>{
       if(matCostByDay.hasOwnProperty(p.date)) matCostByDay[p.date] += p.qty*p.unitCost;
@@ -2081,7 +2090,7 @@
       if(expByDay.hasOwnProperty(e.date)) expByDay[e.date] += Number(e.amount)||0;
     });
 
-    let cumDebt = 0, mBilled=0, mPaid=0, mNewDebt=0, mGrand=0, mTithe=0, mPf=0, mEx=0, activeDays=0, mCp=0, mMatCost=0, mMatCostUsed=0;
+    let cumDebt = 0, mBilled=0, mPaid=0, mNewDebt=0, mGrand=0, mTithe=0, mPf=0, mEx=0, activeDays=0, mCp=0, mMatCost=0, mMatCostUsed=0, mMatWaste=0;
     const rows = [];
     for(let d=1; d<=nDays; d++){
       const date = dateFor(d);
@@ -2091,14 +2100,18 @@
       const cp = cpByDay[date];
       const matCost = matCostByDay[date];
       const matCostUsed = matCostUsedByDay[date];
+      const matWaste = matWasteByDay[date];
       cumDebt += newDebt;
-      const grand = Math.max(paid - cp - matCostUsed, 0); // net profit: cash collected minus cost of production minus material cost actually USED that day
+      // net profit: cash collected minus cost of production minus the material actually USED and WASTED
+      // that day. Matches dayStats() and monthStats() — all three must stay in step, since Tithe/PF/EX
+      // are split off this figure.
+      const grand = Math.max(paid - cp - matCostUsed - matWaste, 0);
       const tithe = grand * s.tithePct/100;
       const pf = grand * s.pfPct/100;
       const ex = grand * s.exPct/100;
       if(billed>0 || paid>0) activeDays++;
-      mBilled+=billed; mPaid+=paid; mNewDebt+=newDebt; mGrand+=grand; mTithe+=tithe; mPf+=pf; mEx+=ex; mCp+=cp; mMatCost+=matCost; mMatCostUsed+=matCostUsed;
-      rows.push({d, date, billed, paid, newDebt, grand, tithe, pf, ex, cumDebt, matCostUsed, week: isoWeekLabel(date)});
+      mBilled+=billed; mPaid+=paid; mNewDebt+=newDebt; mGrand+=grand; mTithe+=tithe; mPf+=pf; mEx+=ex; mCp+=cp; mMatCost+=matCost; mMatCostUsed+=matCostUsed; mMatWaste+=matWaste;
+      rows.push({d, date, billed, paid, newDebt, grand, tithe, pf, ex, cumDebt, matCostUsed, matWaste, week: isoWeekLabel(date)});
     }
     const collectionRate = mBilled ? mPaid/mBilled : 0;
     const debtPct = mBilled ? mNewDebt/mBilled : 0;
@@ -2106,19 +2119,20 @@
 
     function buildDailyWeeklyTable(){
       let html=''; let wk=null; let wkHasData=false;
-      let acc={billed:0,paid:0,newDebt:0,grand:0,tithe:0,pf:0,ex:0,matCostUsed:0};
+      let acc={billed:0,paid:0,newDebt:0,grand:0,tithe:0,pf:0,ex:0,matCostUsed:0,matWaste:0};
       function flush(){
         if(wk===null || !wkHasData) return '';
         return `<tr style="font-weight:700;background:rgba(185,121,28,0.08);">
           <td>${wk} TOTAL</td>
           <td class="num-col">${naira(acc.billed)}</td><td class="num-col">${naira(acc.paid)}</td>
-          <td class="num-col">${naira(acc.newDebt)}</td><td class="num-col">${naira(acc.matCostUsed)}</td><td class="num-col">${naira(acc.grand)}</td>
+          <td class="num-col">${naira(acc.newDebt)}</td><td class="num-col">${naira(acc.matCostUsed)}</td>
+          <td class="num-col">${naira(acc.matWaste)}</td><td class="num-col">${naira(acc.grand)}</td>
           <td class="num-col">${naira(acc.tithe)}</td><td class="num-col">${naira(acc.pf)}</td>
           <td class="num-col">${naira(acc.ex)}</td><td></td>
         </tr>`;
       }
       rows.forEach(r=>{
-        if(wk!==null && r.week!==wk){ html += flush(); acc={billed:0,paid:0,newDebt:0,grand:0,tithe:0,pf:0,ex:0,matCostUsed:0}; wkHasData=false; }
+        if(wk!==null && r.week!==wk){ html += flush(); acc={billed:0,paid:0,newDebt:0,grand:0,tithe:0,pf:0,ex:0,matCostUsed:0,matWaste:0}; wkHasData=false; }
         wk = r.week;
         if(r.billed>0 || r.paid>0){
           wkHasData = true;
@@ -2126,15 +2140,16 @@
             <td>${r.d}</td><td class="num-col">${naira(r.billed)}</td><td class="num-col">${naira(r.paid)}</td>
             <td class="num-col ${r.newDebt>0?'flag':''}">${naira(r.newDebt)}</td>
             <td class="num-col muted">${naira(r.matCostUsed)}</td>
+            <td class="num-col ${r.matWaste>0?'flag':'muted'}">${naira(r.matWaste)}</td>
             <td class="num-col">${naira(r.grand)}</td>
             <td class="num-col">${naira(r.tithe)}</td><td class="num-col">${naira(r.pf)}</td><td class="num-col">${naira(r.ex)}</td>
             <td class="num-col">${naira(r.cumDebt)}</td>
           </tr>`;
         }
-        acc.billed+=r.billed; acc.paid+=r.paid; acc.newDebt+=r.newDebt; acc.grand+=r.grand; acc.tithe+=r.tithe; acc.pf+=r.pf; acc.ex+=r.ex; acc.matCostUsed+=r.matCostUsed;
+        acc.billed+=r.billed; acc.paid+=r.paid; acc.newDebt+=r.newDebt; acc.grand+=r.grand; acc.tithe+=r.tithe; acc.pf+=r.pf; acc.ex+=r.ex; acc.matCostUsed+=r.matCostUsed; acc.matWaste+=r.matWaste;
       });
       html += flush();
-      return html || `<tr><td colspan="10" class="lg-empty">No jobs logged yet this month</td></tr>`;
+      return html || `<tr><td colspan="11" class="lg-empty">No jobs logged yet this month</td></tr>`;
     }
 
     function buildIncomeExpenseTable(){
@@ -2474,10 +2489,10 @@
 
       <div class="lg-card">
         <div class="lg-card-title">${monthLabel} — Daily &amp; Weekly Summary</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Paid" reflects the date money actually came in — including later payments against old debt — not just the day the job was taken in. "Net Profit" = Paid minus that day's cost of production minus "Mat. Used" (the cost of material actually used on that day's jobs), which is what Tithe/PF/EX are split from. Money spent buying stock (see the footnote below) is tracked separately for reference and doesn't reduce Net Profit directly — it's "recovered" day by day as the stock gets used.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Paid" reflects the date money actually came in — including later payments against old debt — not just the day the job was taken in. "Net Profit" = Paid minus that day's cost of production minus "Mat. Used" (material actually used on that day's jobs) minus "Mat. Wasted" (material spoiled on them), which is what Tithe/PF/EX are split from. Money spent buying stock (see the footnote below) is tracked separately for reference and doesn't reduce Net Profit directly — it's "recovered" day by day as the stock gets used.</div>
         <div style="overflow-x:auto;"><table><thead><tr>
           <th>Day</th><th class="num-col">Billed</th><th class="num-col">Paid</th><th class="num-col">New Debt</th>
-          <th class="num-col">Mat. Used</th>
+          <th class="num-col">Mat. Used</th><th class="num-col">Mat. Wasted</th>
           <th class="num-col">Net Profit</th><th class="num-col">Tithe (${s.tithePct}%)</th><th class="num-col">PF (${s.pfPct}%)</th><th class="num-col">EX (${s.exPct}%)</th><th class="num-col">Cum. Debt</th>
         </tr></thead><tbody>
         ${buildDailyWeeklyTable()}
@@ -2486,12 +2501,13 @@
           <td class="num-col">${naira(mBilled)}</td><td class="num-col">${naira(mPaid)}</td>
           <td class="num-col">${naira(mNewDebt)}</td>
           <td class="num-col">${naira(mMatCostUsed)}</td>
+          <td class="num-col ${mMatWaste>0?'flag':''}">${naira(mMatWaste)}</td>
           <td class="num-col">${naira(mGrand)}</td>
           <td class="num-col">${naira(mTithe)}</td><td class="num-col">${naira(mPf)}</td><td class="num-col">${naira(mEx)}</td>
           <td class="num-col">${naira(cumDebt)}</td>
         </tr>
         </tbody></table></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:6px;">This month's cost of production: ${naira(mCp)} &middot; material cost bought: ${naira(mMatCost)} &middot; material cost used: ${naira(mMatCostUsed)} — <a href="#" class="goto-purchase-log" style="color:var(--teal);">see Purchase Log</a></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;">This month's cost of production: ${naira(mCp)} &middot; material cost bought: ${naira(mMatCost)} &middot; material cost used: ${naira(mMatCostUsed)} &middot; material cost wasted: ${naira(mMatWaste)} — <a href="#" class="goto-purchase-log" style="color:var(--teal);">see Purchase Log</a></div>
       </div>
 
       <div class="lg-grid cols-2">
@@ -2550,12 +2566,12 @@
     document.getElementById('sm-export-jobs').addEventListener('click', ()=>exportJobsCSV(state.jobs.slice().sort((a,b)=>(a.dateReceived||'').localeCompare(b.dateReceived||'')), 'all-jobs'));
     document.getElementById('sm-export-customers').addEventListener('click', exportCustomersCSV);
     document.getElementById('sm-export-summary').addEventListener('click', ()=>{
-      const rows = [['Day','Billed','Paid','New Debt','Material Used','Net Profit',`Tithe ${s.tithePct}%`,`PF ${s.pfPct}%`,`EX ${s.exPct}%`,'Expenses','Cost of Production']];
+      const rows = [['Day','Billed','Paid','New Debt','Material Used','Material Wasted','Net Profit',`Tithe ${s.tithePct}%`,`PF ${s.pfPct}%`,`EX ${s.exPct}%`,'Expenses','Cost of Production']];
       for(let d=1; d<=nDays; d++){
         const date = dateFor(d);
         const st = dayStats(date);
         if(!st.billed && !st.paid && !st.expenseTotal && !st.cp) continue;
-        rows.push([date, plainNum(st.billed), plainNum(st.paid), plainNum(st.newDebt), plainNum(st.matCostUsed),
+        rows.push([date, plainNum(st.billed), plainNum(st.paid), plainNum(st.newDebt), plainNum(st.matCostUsed), plainNum(st.matWasteCost),
           plainNum(st.netProfit), plainNum(st.tithe), plainNum(st.pf), plainNum(st.ex), plainNum(st.expenseTotal), plainNum(st.cp)]);
       }
       downloadCSV(`summary-${year}-${pad(month+1)}.csv`, rows);
@@ -3830,6 +3846,109 @@
     });
     return list.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   }
+
+  // ---------- material cost account (Inventory tab) ----------
+  // Shaped after the CP Account tab: a day you can navigate, then the month day by day.
+  // "Bought" is keyed to the purchase date; "Used" and "Wasted" to the job intake date.
+  // Only Used + Wasted come out of Net Profit — that total is `deducted`.
+  let matViewDate = todayISO();
+  function materialUsedCostOnDate(dateStr){
+    return state.jobs.filter(j=>j.dateReceived===dateStr)
+      .reduce((s,j)=>s+jobTotals(j).materialUsedCost, 0);
+  }
+  function materialWasteCostOnDate(dateStr){
+    return state.jobs.filter(j=>j.dateReceived===dateStr)
+      .reduce((s,j)=>s+jobTotals(j).materialWasteCost, 0);
+  }
+  function matCostDayRow(dateStr){
+    const bought = materialPurchaseCostOnDate(dateStr);
+    const used   = materialUsedCostOnDate(dateStr);
+    const wasted = materialWasteCostOnDate(dateStr);
+    return {bought, used, wasted, deducted: used + wasted};
+  }
+  function matCostMonthTable(ym){
+    const [yy, mm] = ym.split('-').map(Number);
+    const n = daysInMonth(yy, mm-1);
+    const pad = x=>String(x).padStart(2,'0');
+    let rows = '', tBought=0, tUsed=0, tWasted=0, shown=0;
+    for(let d=1; d<=n; d++){
+      const date = `${ym}-${pad(d)}`;
+      const r = matCostDayRow(date);
+      if(!r.bought && !r.used && !r.wasted) continue;
+      shown++;
+      tBought+=r.bought; tUsed+=r.used; tWasted+=r.wasted;
+      const isToday = date === matViewDate;
+      rows += `<tr style="${isToday?'background:rgba(185,121,28,0.10);font-weight:600;':''}">
+        <td><button class="subtle-link mat-jump" data-date="${date}">${fmtDate(date)}</button></td>
+        <td class="num-col">${naira(r.bought)}</td>
+        <td class="num-col">${naira(r.used)}</td>
+        <td class="num-col ${r.wasted>0?'flag':''}">${naira(r.wasted)}</td>
+        <td class="num-col">${naira(r.deducted)}</td>
+      </tr>`;
+    }
+    if(!shown){
+      return `<div class="lg-empty">No material bought, used or wasted this month yet.</div>`;
+    }
+    return `<div style="overflow-x:auto;"><table><thead><tr>
+      <th>Day</th><th class="num-col">Bought</th><th class="num-col">Used</th>
+      <th class="num-col">Wasted</th><th class="num-col">Out of Net Profit</th>
+    </tr></thead><tbody>
+      ${rows}
+      <tr style="font-weight:700;border-top:2px solid var(--ink);">
+        <td>MONTH TOTAL</td>
+        <td class="num-col">${naira(tBought)}</td>
+        <td class="num-col">${naira(tUsed)}</td>
+        <td class="num-col ${tWasted>0?'flag':''}">${naira(tWasted)}</td>
+        <td class="num-col">${naira(tUsed+tWasted)}</td>
+      </tr>
+    </tbody></table></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px;">Days with no material bought, used or wasted are skipped. <b>Bought</b> is money that left the till that day; it does not reduce Net Profit. Click a date to jump to it.</div>`;
+  }
+  function matCostAccountHTML(){
+    const r = matCostDayRow(matViewDate);
+    const ym = matViewDate.slice(0,7);
+    const monthLabel = new Date(matViewDate+'T00:00:00').toLocaleDateString('en-NG',{month:'long',year:'numeric'});
+    return `
+      <div class="lg-card">
+        <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
+          <div><label style="margin-top:0">Date</label><input id="mat-nav-date" type="date" value="${matViewDate}"></div>
+          <button class="lg-btn ghost small" id="mat-nav-prev" type="button">◀ Prev day</button>
+          <button class="lg-btn ghost small" id="mat-nav-today" type="button">Today</button>
+          <button class="lg-btn ghost small" id="mat-nav-next" type="button">Next day ▶</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">
+          What material cost ${fmtDate(matViewDate)}. <b>Bought</b> is stock you paid for that day — a cash movement, not a hit to profit. <b>Used</b> and <b>Wasted</b> are the material that went into (and was spoiled on) that day's jobs, valued at today's price, and together they come straight out of Net Profit.
+        </div>
+      </div>
+
+      <div class="lg-grid cols-4">
+        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.bought)}</div><div class="lbl">Bought — stock paid for</div></div>
+        <div class="lg-card lg-kpi"><div class="num">${naira(r.used)}</div><div class="lbl">Used on today's jobs</div></div>
+        <div class="lg-card lg-kpi ${r.wasted>0?'debt':''}"><div class="num">${naira(r.wasted)}</div><div class="lbl">Wasted / spoiled</div></div>
+        <div class="lg-card lg-kpi ${r.deducted>0?'debt':'paid'}"><div class="num">${naira(r.deducted)}</div><div class="lbl">Out of Net Profit (used + wasted)</div></div>
+      </div>
+
+      ${r.wasted>0 ? `<div class="lg-card" style="border-left:3px solid var(--clay);">
+        <div style="font-size:12.5px;color:var(--clay);font-weight:600;">${naira(r.wasted)} of material was spoiled on ${fmtDate(matViewDate)}.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">That comes out of Net Profit alongside the material used, so it also shrinks the Tithe/PF/EX split for the day. If it looks wrong, check the waste figures on that day's jobs.</div>
+      </div>` : ''}
+
+      <div class="lg-card">
+        <div class="lg-card-title">${monthLabel} — Material Cost, Day by Day</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">The same figures the Summary tab splits Tithe/PF/EX from. Click a date to jump to it.</div>
+        ${matCostMonthTable(ym)}
+      </div>`;
+  }
+  function attachMatCostAccountHandlers(){
+    document.getElementById('mat-nav-date').addEventListener('change', (e)=>{ matViewDate = e.target.value || todayISO(); renderInventory(); });
+    document.getElementById('mat-nav-prev').addEventListener('click', ()=>{ matViewDate = shiftDate(matViewDate,-1); renderInventory(); });
+    document.getElementById('mat-nav-next').addEventListener('click', ()=>{ matViewDate = shiftDate(matViewDate,1); renderInventory(); });
+    document.getElementById('mat-nav-today').addEventListener('click', ()=>{ matViewDate = todayISO(); renderInventory(); });
+    document.querySelectorAll('.mat-jump').forEach(b=>{
+      b.addEventListener('click', ()=>{ matViewDate = b.dataset.date; renderInventory(); });
+    });
+  }
+
   function renderInventory(){
     content.innerHTML = `
       <div class="lg-card">
@@ -3863,6 +3982,7 @@
         </div>
         <div style="margin-top:10px;"><button class="lg-btn" id="sp-add">Record Purchase</button></div>
       </div>
+      ${matCostAccountHTML()}
       <div class="lg-card">
         <div class="lg-card-title">Stock Tracker (${state.materials.length})</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
@@ -3923,6 +4043,7 @@
       toast(`Recorded: ${qty} ${m.unit||'unit'} of ${m.name} — ${naira(qty*unitCost)}`);
       renderInventory();
     });
+    attachMatCostAccountHandlers();
     renderMaterialsTable();
     document.getElementById('sp-log').innerHTML = renderStockPurchaseLog();
     attachStockPurchaseLogHandlers();

@@ -34,6 +34,14 @@ it. Merging deliberately once beats discovering the drift later.
 **Verify a deploy by diffing the live URL, never by checking the site loads.** A
 skipped Netlify build still returns HTTP 200 while serving a months-old file.
 
+**Never build a `YYYY-MM-DD` with `toISOString()`.** The shop is UTC+1, so local
+midnight is the *previous* day in UTC. `todayISO()` and `shiftDate()` both did this:
+"today" read as yesterday until 1am, and every prev/next-day button on Daily View,
+Jobs, Expenses and CP Account stepped two days back and none forward. Use `isoOf()`,
+which formats from local parts. The bug is invisible in a UTC-or-behind test
+environment — check `Intl.DateTimeFormat().resolvedOptions().timeZone` before
+concluding date arithmetic works.
+
 **The preview pane serves stale snapshots.** `navigate` and `location.reload()`
 both kept returning old bytes for several attempts; `preview_start` with the file
 URL forces a genuinely fresh render. If a check reports code you know you just
@@ -75,3 +83,9 @@ presses get 140ms; repeated actions get nothing.
   be timed; production-speed averages stay empty until new jobs flow through.
 - **Untested write paths**: saving a corrected stage time, saving a customer
   phone, and recording an old-debt payment (no customer has old debt set).
+- **Wasted material now comes out of Net Profit everywhere.** `dayStats()` and
+  `monthStats()` always did; the Summary day table didn't, so it disagreed with
+  Daily View and with its own CSV export. Fixed. No job in the ledger records
+  waste yet, so the subtraction is code-verified but has never run on real
+  figures — the first job with waste is worth eyeballing across Daily View,
+  Summary and Inventory to confirm the three agree.
