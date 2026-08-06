@@ -546,7 +546,7 @@
     exadjust: [],
     quotes: [],
     recurring: [],
-    settings: {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''},
+    settings: {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
     tab: 'dayview',
     loaded: false,
   };
@@ -743,7 +743,7 @@
   // whole ledger to the network every 5 minutes.
   const lastPersisted = Object.create(null);
   const STORAGE_KEYS = [['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
-  const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:''};
+  const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
     // instead of eleven. The document is the signed-in user's uid, which is what the
@@ -1136,7 +1136,7 @@
     state.exadjust = [];
     state.quotes = [];
     state.recurring = [];
-    state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: ''});
+    state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: '', matOpeningFloat: 0, matStartDate: ''});
     await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings']);
     toast('All data cleared — starting fresh');
     state.tab = 'dayview';
@@ -2489,7 +2489,7 @@
 
       <div class="lg-card">
         <div class="lg-card-title">${monthLabel} — Daily &amp; Weekly Summary</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Paid" reflects the date money actually came in — including later payments against old debt — not just the day the job was taken in. "Net Profit" = Paid minus that day's cost of production minus "Mat. Used" (material actually used on that day's jobs) minus "Mat. Wasted" (material spoiled on them), which is what Tithe/PF/EX are split from. Money spent buying stock (see the footnote below) is tracked separately for reference and doesn't reduce Net Profit directly — it's "recovered" day by day as the stock gets used.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Paid" reflects the date money actually came in — including later payments against old debt — not just the day the job was taken in. "Net Profit" = Paid minus that day's cost of production minus "Mat. Used" (material actually used on that day's jobs) minus "Mat. Wasted" (material spoiled on them), which is what Tithe/PF/EX are split from. Money spent buying stock never reduces Net Profit — restocking is paid out of the material purse on the <b>Inventory</b> tab, which collects the Mat. Used and Mat. Wasted charged on every job.</div>
         <div style="overflow-x:auto;"><table><thead><tr>
           <th>Day</th><th class="num-col">Billed</th><th class="num-col">Paid</th><th class="num-col">New Debt</th>
           <th class="num-col">Mat. Used</th><th class="num-col">Mat. Wasted</th>
@@ -3847,10 +3847,15 @@
     return list.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   }
 
-  // ---------- material cost account (Inventory tab) ----------
-  // Shaped after the CP Account tab: a day you can navigate, then the month day by day.
-  // "Bought" is keyed to the purchase date; "Used" and "Wasted" to the job intake date.
-  // Only Used + Wasted come out of Net Profit — that total is `deducted`.
+  // ---------- material purse (Inventory tab) ----------
+  // Works exactly like the CP Account purse, for material instead of production money.
+  // IN  = the material charged against each job (used + wasted), keyed to the job intake date.
+  //       This is the same figure that comes out of Net Profit, so the purse collects precisely
+  //       what the profit calculation already gave up.
+  // OUT = money spent restocking, keyed to the purchase date.
+  // Restocking is therefore funded by material already charged out, NOT by profit — buying stock
+  // has never entered the Net Profit formula and still doesn't. A negative closing balance means
+  // you've restocked beyond what the jobs so far have paid for.
   let matViewDate = todayISO();
   function materialUsedCostOnDate(dateStr){
     return state.jobs.filter(j=>j.dateReceived===dateStr)
@@ -3860,52 +3865,90 @@
     return state.jobs.filter(j=>j.dateReceived===dateStr)
       .reduce((s,j)=>s+jobTotals(j).materialWasteCost, 0);
   }
+  function matInflowFor(dateStr){
+    return materialUsedCostOnDate(dateStr) + materialWasteCostOnDate(dateStr);
+  }
+  function matSpentFor(dateStr){ return materialPurchaseCostOnDate(dateStr); }
+  // Every date that moves the purse — a day material was charged to a job, or stock was bought.
+  function matActiveDates(){
+    const set = new Set();
+    state.jobs.forEach(j=>{
+      if(!j.dateReceived) return;
+      const t = jobTotals(j);
+      if(t.materialUsedCost || t.materialWasteCost) set.add(j.dateReceived);
+    });
+    allStockPurchases().forEach(p=>{ if(p.date) set.add(p.date); });
+    return Array.from(set).sort();
+  }
+  function matOpeningFor(dateStr){
+    const start = state.settings.matStartDate || '';
+    let bal = Number(state.settings.matOpeningFloat)||0;
+    matActiveDates().forEach(d=>{
+      if(d >= dateStr) return;
+      if(start && d < start) return;
+      bal += matInflowFor(d) - matSpentFor(d);
+    });
+    return bal;
+  }
   function matCostDayRow(dateStr){
     const bought = materialPurchaseCostOnDate(dateStr);
     const used   = materialUsedCostOnDate(dateStr);
     const wasted = materialWasteCostOnDate(dateStr);
-    return {bought, used, wasted, deducted: used + wasted};
+    const opening = matOpeningFor(dateStr);
+    const inflow = used + wasted;
+    return {bought, used, wasted, deducted: inflow,
+            opening, inflow, spent: bought,
+            available: opening + inflow,
+            closing: opening + inflow - bought};
   }
   function matCostMonthTable(ym){
     const [yy, mm] = ym.split('-').map(Number);
     const n = daysInMonth(yy, mm-1);
     const pad = x=>String(x).padStart(2,'0');
-    let rows = '', tBought=0, tUsed=0, tWasted=0, shown=0;
+    let running = matOpeningFor(`${ym}-01`);
+    const monthOpening = running;
+    let rows = '', inTotal = 0, outTotal = 0, shown = 0;
     for(let d=1; d<=n; d++){
       const date = `${ym}-${pad(d)}`;
-      const r = matCostDayRow(date);
-      if(!r.bought && !r.used && !r.wasted) continue;
+      const inflow = matInflowFor(date);
+      const spent  = matSpentFor(date);
+      const opening = running;
+      running = opening + inflow - spent;
+      if(!inflow && !spent) continue;
       shown++;
-      tBought+=r.bought; tUsed+=r.used; tWasted+=r.wasted;
+      inTotal += inflow; outTotal += spent;
       const isToday = date === matViewDate;
       rows += `<tr style="${isToday?'background:rgba(185,121,28,0.10);font-weight:600;':''}">
         <td><button class="subtle-link mat-jump" data-date="${date}">${fmtDate(date)}</button></td>
-        <td class="num-col">${naira(r.bought)}</td>
-        <td class="num-col">${naira(r.used)}</td>
-        <td class="num-col ${r.wasted>0?'flag':''}">${naira(r.wasted)}</td>
-        <td class="num-col">${naira(r.deducted)}</td>
+        <td class="num-col">${naira(opening)}</td>
+        <td class="num-col">${naira(inflow)}</td>
+        <td class="num-col">${naira(opening+inflow)}</td>
+        <td class="num-col">${naira(spent)}</td>
+        <td class="num-col ${running<0?'flag':''}">${naira(running)}</td>
       </tr>`;
     }
     if(!shown){
-      return `<div class="lg-empty">No material bought, used or wasted this month yet.</div>`;
+      return `<div class="lg-empty">Nothing has moved through the material purse this month yet.</div>`;
     }
     return `<div style="overflow-x:auto;"><table><thead><tr>
-      <th>Day</th><th class="num-col">Bought</th><th class="num-col">Used</th>
-      <th class="num-col">Wasted</th><th class="num-col">Out of Net Profit</th>
+      <th>Day</th><th class="num-col">Carried In</th><th class="num-col">Material In</th>
+      <th class="num-col">Available</th><th class="num-col">Spent Restocking</th><th class="num-col">Carried Forward</th>
     </tr></thead><tbody>
       ${rows}
       <tr style="font-weight:700;border-top:2px solid var(--ink);">
         <td>MONTH TOTAL</td>
-        <td class="num-col">${naira(tBought)}</td>
-        <td class="num-col">${naira(tUsed)}</td>
-        <td class="num-col ${tWasted>0?'flag':''}">${naira(tWasted)}</td>
-        <td class="num-col">${naira(tUsed+tWasted)}</td>
+        <td class="num-col">${naira(monthOpening)}</td>
+        <td class="num-col">${naira(inTotal)}</td>
+        <td class="num-col">—</td>
+        <td class="num-col">${naira(outTotal)}</td>
+        <td class="num-col ${running<0?'flag':''}">${naira(running)}</td>
       </tr>
     </tbody></table></div>
-    <div style="font-size:11px;color:var(--muted);margin-top:6px;">Days with no material bought, used or wasted are skipped. <b>Bought</b> is money that left the till that day; it does not reduce Net Profit. Click a date to jump to it.</div>`;
+    <div style="font-size:11px;color:var(--muted);margin-top:6px;">Days where no material was charged to a job and no stock was bought are skipped. <b>Material In</b> is what that day's jobs were charged for material, used and wasted together. Click a date to jump to it.</div>`;
   }
   function matCostAccountHTML(){
     const r = matCostDayRow(matViewDate);
+    const s = state.settings;
     const ym = matViewDate.slice(0,7);
     const monthLabel = new Date(matViewDate+'T00:00:00').toLocaleDateString('en-NG',{month:'long',year:'numeric'});
     return `
@@ -3917,26 +3960,51 @@
           <button class="lg-btn ghost small" id="mat-nav-next" type="button">Next day ▶</button>
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:8px;">
-          What material cost ${fmtDate(matViewDate)}. <b>Bought</b> is stock you paid for that day — a cash movement, not a hit to profit. <b>Used</b> and <b>Wasted</b> are the material that went into (and was spoiled on) that day's jobs, valued at today's price, and together they come straight out of Net Profit.
+          The material purse for ${fmtDate(matViewDate)}. Every job charges material out (used + wasted) and that money collects here — restocking is paid <b>out of this purse, not out of profit</b>. Buying stock never touches Net Profit; it only draws the purse down.
         </div>
       </div>
 
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.bought)}</div><div class="lbl">Bought — stock paid for</div></div>
-        <div class="lg-card lg-kpi"><div class="num">${naira(r.used)}</div><div class="lbl">Used on today's jobs</div></div>
-        <div class="lg-card lg-kpi ${r.wasted>0?'debt':''}"><div class="num">${naira(r.wasted)}</div><div class="lbl">Wasted / spoiled</div></div>
-        <div class="lg-card lg-kpi ${r.deducted>0?'debt':'paid'}"><div class="num">${naira(r.deducted)}</div><div class="lbl">Out of Net Profit (used + wasted)</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.opening)}</div><div class="lbl">Carried in from ${fmtDate(shiftDate(matViewDate,-1))}</div></div>
+        <div class="lg-card lg-kpi"><div class="num">${naira(r.inflow)}</div><div class="lbl">Material charged out today</div></div>
+        <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(r.available)}</div><div class="lbl">Available to restock with</div></div>
+        <div class="lg-card lg-kpi ${r.closing<0?'debt':'paid'}"><div class="num">${naira(r.closing)}</div><div class="lbl">Carries to ${fmtDate(shiftDate(matViewDate,1))}</div></div>
       </div>
 
-      ${r.wasted>0 ? `<div class="lg-card" style="border-left:3px solid var(--clay);">
-        <div style="font-size:12.5px;color:var(--clay);font-weight:600;">${naira(r.wasted)} of material was spoiled on ${fmtDate(matViewDate)}.</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px;">That comes out of Net Profit alongside the material used, so it also shrinks the Tithe/PF/EX split for the day. If it looks wrong, check the waste figures on that day's jobs.</div>
+      ${r.closing<0 ? `<div class="lg-card" style="border-left:3px solid var(--clay);">
+        <div style="font-size:12.5px;color:var(--clay);font-weight:600;">The purse is ${naira(Math.abs(r.closing))} down — you've restocked more than the jobs have charged out so far.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">This is normal right after a bulk buy: the stock is sitting on the shelf and gets charged back day by day as jobs use it, so the balance climbs on its own. Net Profit is unaffected either way. It's only worth investigating if it stays down after the batch should have been used up — that would mean your material prices aren't recovering what the stock costs. If a lot of this is old history, set a <b>Start purse from</b> date below.</div>
       </div>` : ''}
 
       <div class="lg-card">
-        <div class="lg-card-title">${monthLabel} — Material Cost, Day by Day</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">The same figures the Summary tab splits Tithe/PF/EX from. Click a date to jump to it.</div>
+        <div class="lg-card-title">What Moved the Purse — ${fmtDate(matViewDate)}</div>
+        <div class="lg-grid cols-3">
+          <div class="lg-card"><div class="lg-card-title">Used on today's jobs</div><div style="font-size:18px;font-weight:600">${naira(r.used)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">charged into the purse</div></div>
+          <div class="lg-card"><div class="lg-card-title">Wasted / spoiled</div><div style="font-size:18px;font-weight:600;${r.wasted>0?'color:var(--clay);':''}">${naira(r.wasted)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">also charged in</div></div>
+          <div class="lg-card"><div class="lg-card-title">Spent restocking</div><div style="font-size:18px;font-weight:600">${naira(r.spent)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">paid out of the purse</div></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">Used and wasted are also what comes out of Net Profit on the Summary tab — the purse collects exactly what the profit calculation gave up.</div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">${monthLabel} — Material Purse, Day by Day</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">Each day's <b>Carried Forward</b> becomes the next day's <b>Carried In</b>. Click a date to jump to it.</div>
         ${matCostMonthTable(ym)}
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Material Purse Setup</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          Set these once. <b>Opening float</b> is stock value you already held before the purse started. <b>Start from</b> tells the purse to ignore jobs and purchases before that date — useful if you have months of history whose material was bought and used long ago.
+        </div>
+        <div class="lg-grid cols-3">
+          <div><label style="margin-top:0">Opening float (₦)</label><input id="mat-float" type="number" value="${Number(s.matOpeningFloat)||0}"></div>
+          <div><label style="margin-top:0">Start purse from</label><input id="mat-start" type="date" value="${esc(s.matStartDate||'')}"></div>
+          <div style="align-self:end;" class="lg-row-actions">
+            <button class="lg-btn ghost small" id="mat-setup-save" type="button">Save setup</button>
+            ${s.matStartDate?`<button class="lg-btn ghost small" id="mat-start-clear" type="button">Count all history</button>`:''}
+          </div>
+        </div>
       </div>`;
   }
   function attachMatCostAccountHandlers(){
@@ -3946,6 +4014,20 @@
     document.getElementById('mat-nav-today').addEventListener('click', ()=>{ matViewDate = todayISO(); renderInventory(); });
     document.querySelectorAll('.mat-jump').forEach(b=>{
       b.addEventListener('click', ()=>{ matViewDate = b.dataset.date; renderInventory(); });
+    });
+    document.getElementById('mat-setup-save').addEventListener('click', async ()=>{
+      state.settings.matOpeningFloat = Number(document.getElementById('mat-float').value)||0;
+      state.settings.matStartDate = document.getElementById('mat-start').value || '';
+      await save('settings');
+      toast('Material purse setup saved');
+      renderInventory();
+    });
+    const matClear = document.getElementById('mat-start-clear');
+    if(matClear) matClear.addEventListener('click', async ()=>{
+      state.settings.matStartDate = '';
+      await save('settings');
+      toast('Material purse now counts all history');
+      renderInventory();
     });
   }
 

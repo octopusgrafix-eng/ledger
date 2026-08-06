@@ -58,6 +58,21 @@ and the user is told.
 
 Signing in cannot be done — it needs the owner's password.
 
+## How the money actually splits
+
+Three purses, all the same shape (`*OpeningFor` / `*InflowFor` / `*SpentFor`, an
+opening float and an optional start date): **CP Account** for production money,
+**Expenses**, and **Material** on the Inventory tab. Copy the CP one when adding
+another.
+
+Net Profit = cash collected − cost of production − material used − material
+wasted. **Buying stock is not in that formula and never has been** — restocking
+is funded by the material purse, which collects the used + wasted charged onto
+each job. Stock purchases do reduce Net Cash, which is a cash-movement figure,
+not profit. Tithe/PF/EX are split off Net Profit, so anything that changes it
+changes the split: `dayStats()`, `monthStats()` and the Summary day table all
+compute it separately and must stay in step.
+
 ## Conventions that have held
 
 Semantic colours are load-bearing: clay = debt, green = paid, amber = warning.
@@ -83,6 +98,11 @@ presses get 140ms; repeated actions get nothing.
   be timed; production-speed averages stay empty until new jobs flow through.
 - **Untested write paths**: saving a corrected stage time, saving a customer
   phone, and recording an old-debt payment (no customer has old debt set).
+- **The material purse opens deep in the red (−₦100,857 as of 6 Aug 2026).** Not
+  a bug: a ₦189,000 restock on 5 Aug hasn't been used up, and the purse only
+  counts material as it gets charged onto jobs. It climbs back on its own. If the
+  owner wants a clean start rather than watching it recover, the fix is an
+  opening float or a "start purse from" date in Material Purse Setup.
 - **Wasted material now comes out of Net Profit everywhere.** `dayStats()` and
   `monthStats()` always did; the Summary day table didn't, so it disagreed with
   Daily View and with its own CSV export. Fixed. No job in the ledger records
