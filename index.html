@@ -2667,6 +2667,9 @@
   let jobsView = 'board';
   let jobsViewDate = todayISO();
   let jobsDateFilterOn = true;
+  // Persisted so the view survives a re-render, and so other tabs can drive it —
+  // the Customers tab jumps here pre-filtered to one customer's outstanding jobs.
+  let jobsSearch = '';
   function renderJobs(){
     content.innerHTML = `
       <div class="lg-card">
@@ -2686,7 +2689,7 @@
           <button class="lg-btn ${jobsView==='table'?'':'ghost'} small" id="jv-table">Table</button>
         </div>
         <div class="lg-row-actions">
-          <input id="jobs-search" placeholder="Search customer or description…" style="max-width:260px;">
+          <input id="jobs-search" placeholder="Search customer or description…" value="${esc(jobsSearch)}" style="max-width:260px;">
           <button class="lg-btn ghost small" id="jv-export" type="button">\u2b07 Export CSV</button>
         </div>
       </div>
@@ -2704,11 +2707,12 @@
     // slowest interaction in the app once the ledger has a few hundred jobs.
     let jobsSearchTimer = null;
     search.addEventListener('input', ()=>{
+      jobsSearch = search.value;
       clearTimeout(jobsSearchTimer);
-      jobsSearchTimer = setTimeout(()=>renderJobsBody(search.value), 180);
+      jobsSearchTimer = setTimeout(()=>renderJobsBody(jobsSearch), 180);
     });
-    document.getElementById('jv-export').addEventListener('click', ()=>exportJobsCSV(filteredJobs(search.value), 'jobs'));
-    renderJobsBody('');
+    document.getElementById('jv-export').addEventListener('click', ()=>exportJobsCSV(filteredJobs(jobsSearch), 'jobs'));
+    renderJobsBody(jobsSearch);
   }
   function matchesJobQuery(j, q){
     q = (q||'').toUpperCase();
@@ -2918,7 +2922,7 @@
     </tbody></table>`;
   }
   function defaultJobsReRender(){
-    renderJobsBody(document.getElementById('jobs-search')?document.getElementById('jobs-search').value:'');
+    renderJobsBody(jobsSearch);
   }
 
   // ---------- PENDING JOBS ----------
@@ -3402,7 +3406,14 @@
               ? `<button class="owed-pay cu-olddebt-toggle" data-name="${esc(c.name)}" title="Record a payment against this customer's old debt">${naira(c.openingDebtRemaining)}</button>`
               : '<span class="muted">—</span>'
           }</td>
-          <td class="num-col ${c.totalDebt>0?'flag':''}">${naira(c.totalDebt)}</td>
+          <td class="num-col ${c.totalDebt>0?'flag':''}">${
+            // Total Debt is job debt + old debt. Job debt belongs to individual jobs and
+            // can't be settled as one lump from here, so this opens that customer's jobs
+            // where each owed amount is itself payable — rather than being a dead figure.
+            c.totalDebt>0
+              ? `<button class="owed-pay cu-jobdebt-goto" data-name="${esc(c.name)}" title="See this customer's jobs and record a payment">${naira(c.totalDebt)}</button>`
+              : naira(c.totalDebt)
+          }</td>
           <td>${fmtDate(c.lastDate)}</td>
           <td>${c.openingDebtRemaining>0?`<button class="subtle-link cu-olddebt-toggle" data-name="${esc(c.name)}">pay old debt</button>`:''}</td>
         </tr>
@@ -3429,6 +3440,17 @@
         await save('customers');
         toast('Old debt updated for ' + c.name);
         renderCustomers();
+      });
+    });
+    // Total Debt jumps to this customer's jobs, in table view with the date filter off
+    // so nothing is hidden, where each outstanding amount can be paid individually.
+    content.querySelectorAll('.cu-jobdebt-goto').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        state.tab = 'jobs';
+        jobsView = 'table';
+        jobsDateFilterOn = false;
+        jobsSearch = btn.dataset.name;
+        renderAll();
       });
     });
     // Add or correct a phone here when it wasn't collected at intake.
