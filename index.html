@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Job Ledger — Oktopus</title>
+<title>Oktopus Ledger</title>
 <meta name="description" content="Intake, production, delivery and cash record ledger.">
 <meta name="theme-color" content="#F6F1E5">
 <!-- Installable to the home screen. On iPhone this is also what makes the late-job
@@ -12,7 +12,7 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Job Ledger">
+<meta name="apple-mobile-web-app-title" content="Oktopus Ledger">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
@@ -40,7 +40,14 @@
     --font-stamp: var(--font-mono);
   }
   :root{
-    --ink:#1B2A3D;
+    /* Sampled from the OKTOPUS PRINTS logo: deep indigo through to azure. */
+    --ok-deep:#0F0FBE;
+    --ok-blue:#1131F4;
+    --ok-bright:#104FFA;
+
+    /* Ink carries a blue cast now so the whole page reads as one family with the
+       logo, without turning body text into saturated brand colour. */
+    --ink:#151E38;
     --paper:#F6F1E5;
     --paper-deep:#EFE7D4;
     --rule:#D9CFB4;
@@ -50,7 +57,13 @@
     --clay:#AB4530;
     --green:#3E6B45;
     --muted:#8A8168;
-    --paper-shadow: rgba(27,42,61,0.08);
+    --paper-shadow: rgba(21,30,56,0.10);
+
+    /* Motion. Custom curves — the built-in CSS easings are too weak to read as
+       deliberate, and ease-in is never used: it delays the first frame, which is
+       exactly when the eye is watching. */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   }
   *{box-sizing:border-box;}
   html{height:100%;-webkit-text-size-adjust:100%;}
@@ -90,9 +103,17 @@
     font-family:var(--font-slab);font-weight:600;font-size:14px;
     padding:8px 14px;border:1.5px solid var(--ink);background:transparent;
     color:var(--ink);cursor:pointer;border-radius:2px;
+    /* Named properties only — `all` would sweep up layout properties too. */
+    transition:background-color 160ms ease, color 160ms ease,
+               border-color 160ms ease, transform 140ms var(--ease-out);
   }
-  .lg-tab.active{background:var(--ink);color:var(--paper);}
-  .lg-tab:hover:not(.active){background:var(--paper-deep);}
+  .lg-tab.active{background:var(--ok-deep);color:var(--paper);border-color:var(--ok-deep);}
+  /* Tabs are pressed dozens of times a day, so the only motion is the press
+     itself — instant feedback, no entrance or exit choreography. */
+  .lg-tab:active{transform:scale(0.97);}
+  @media (hover:hover) and (pointer:fine){
+    .lg-tab:hover:not(.active){background:var(--paper-deep);border-color:var(--ok-blue);}
+  }
   .lg-card{
     background:rgba(255,253,247,0.55);
     border:1px solid var(--rule);
@@ -119,17 +140,29 @@
     width:100%;font-family:var(--font-mono);font-size:13.5px;
     padding:7px 8px;border:1px solid var(--rule);background:#FFFDF8;color:var(--ink);border-radius:2px;
   }
-  input:focus,select:focus,textarea:focus{outline:1.5px solid var(--amber);}
+  input,select,textarea{transition:border-color 140ms ease, box-shadow 140ms ease;}
+  input:focus,select:focus,textarea:focus{
+    outline:none;border-color:var(--ok-blue);
+    box-shadow:0 0 0 3px rgba(17,49,244,0.16);
+  }
   .lg-btn{
     font-family:var(--font-slab);font-weight:700;font-size:13.5px;
-    padding:9px 16px;border:1.5px solid var(--ink);background:var(--ink);color:var(--paper);
+    padding:9px 16px;border:1.5px solid var(--ok-deep);background:var(--ok-deep);color:var(--paper);
     cursor:pointer;border-radius:2px;letter-spacing:0.3px;
+    transition:background-color 160ms ease, border-color 160ms ease,
+               transform 140ms var(--ease-out), box-shadow 160ms ease;
   }
-  .lg-btn:hover{background:var(--amber-deep);border-color:var(--amber-deep);}
-  .lg-btn.ghost{background:transparent;color:var(--ink);}
-  .lg-btn.ghost:hover{background:var(--paper-deep);}
+  /* Every pressable thing scales on press. It is the one animation worth having
+     everywhere: it confirms the tap landed, and at 140ms it never delays anything. */
+  .lg-btn:active{transform:scale(0.97);}
+  .lg-btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(17,49,244,0.3);}
+  .lg-btn.ghost{background:transparent;color:var(--ink);border-color:var(--ink);}
   .lg-btn.danger{border-color:var(--clay);color:var(--clay);background:transparent;}
-  .lg-btn.danger:hover{background:var(--clay);color:#fff;}
+  @media (hover:hover) and (pointer:fine){
+    .lg-btn:hover{background:var(--ok-blue);border-color:var(--ok-blue);}
+    .lg-btn.ghost:hover{background:var(--paper-deep);border-color:var(--ok-blue);}
+    .lg-btn.danger:hover{background:var(--clay);color:#fff;}
+  }
   .lg-btn.small{padding:5px 10px;font-size:12px;}
   .lg-row-actions{display:flex;gap:6px;flex-wrap:wrap;}
 
@@ -176,9 +209,13 @@
   .toast{
     position:fixed;bottom:18px;right:18px;background:var(--ink);color:var(--paper);
     font-family:var(--font-slab);font-size:13px;padding:10px 16px;border-radius:3px;
-    box-shadow:0 4px 14px rgba(0,0,0,0.25);z-index:999;opacity:0;transition:opacity .25s;
+    box-shadow:0 6px 20px rgba(21,30,56,0.28);z-index:999;
+    opacity:0;transform:translateY(12px) scale(0.97);
+    /* A transition rather than keyframes: toasts fire in quick succession, and a
+       transition retargets mid-flight where keyframes would restart from zero. */
+    transition:opacity 220ms var(--ease-out), transform 220ms var(--ease-out);
   }
-  .toast.show{opacity:1;}
+  .toast.show{opacity:1;transform:translateY(0) scale(1);}
   /* Item name + Qty + Unit + Unit Price + Amount + remove. The old layout carried a
      seventh column for a separate "quick pick" catalog dropdown; the name field is now
      a datalist, so the two are one control. */
@@ -189,7 +226,10 @@
   .material-row{display:grid;grid-template-columns:1.5fr 0.7fr 0.7fr 0.9fr 0.9fr auto;gap:6px;align-items:end;margin-bottom:6px;}
   @media(max-width:700px){.material-row{grid-template-columns:1fr 1fr;}}
   .flag{color:var(--clay);font-weight:600;}
-  .subtle-link{background:none;border:none;color:var(--teal);text-decoration:underline;cursor:pointer;font-family:var(--font-mono);font-size:12px;padding:0;}
+  .subtle-link{background:none;border:none;color:var(--ok-blue);text-decoration:underline;cursor:pointer;font-family:var(--font-mono);font-size:12px;padding:0;
+    transition:color 140ms ease, transform 120ms var(--ease-out);}
+  .subtle-link:active{transform:scale(0.96);}
+  @media (hover:hover) and (pointer:fine){ .subtle-link:hover{color:var(--ok-deep);} }
 
   /* ---- Receipt modal ---- */
   .lg-overlay{
@@ -239,6 +279,8 @@
     font-variant-numeric:tabular-nums;color:var(--clay);
     border-bottom:1.5px dotted var(--clay);
   }
+  .owed-pay{transition:background-color 140ms ease, transform 120ms var(--ease-out);}
+  .owed-pay:active{transform:scale(0.96);}
   .owed-pay:hover,.owed-pay:focus-visible{background:rgba(171,69,48,.1);border-bottom-style:solid;}
   @media(max-width:760px){ .owed-pay{padding:6px 0;} }
 
@@ -258,6 +300,55 @@
     background:var(--clay);margin-right:7px;animation:lg-alarm-pulse 1.6s ease-in-out infinite;
   }
   @media (prefers-reduced-motion: reduce){ .lg-alarm .al-dot{animation:none;} }
+
+  /* ---- Motion ----
+     Budgeted by how often a thing is seen. The sign-in screen happens once per
+     device, so it can afford a staged entrance. Tab content is seen dozens of
+     times a day, so it gets one short fade — and only when the tab actually
+     changes, never on the re-render that follows recording a payment or typing
+     in a search box. Presses get 140ms and nothing else. */
+
+  @keyframes lg-rise{ from{opacity:0;transform:translateY(10px) scale(0.985);} to{opacity:1;transform:none;} }
+  @keyframes lg-fade{ from{opacity:0;} to{opacity:1;} }
+  @keyframes lg-drop{ from{opacity:0;transform:translateY(-8px);} to{opacity:1;transform:none;} }
+
+  /* Tab content. Applied by renderAll() only on a genuine tab change. */
+  #lg-content.lg-enter{ animation:lg-rise 200ms var(--ease-out) both; }
+
+  /* Sign-in: the one place a staged entrance is warranted. The card scales in and
+     its rows rise — the card itself does not translate, or the two transforms
+     compound and the rows appear to overshoot. Nothing starts from scale(0):
+     things in the world do not appear out of nothing. */
+  @keyframes lg-card-in{ from{opacity:0;transform:scale(0.96);} to{opacity:1;transform:none;} }
+  .lg-auth-card{ animation:lg-card-in 420ms var(--ease-out) both; }
+  .lg-auth-card > *{ animation:lg-rise 380ms var(--ease-out) both; }
+  .lg-auth-card > *:nth-child(1){animation-delay:60ms;}
+  .lg-auth-card > *:nth-child(2){animation-delay:100ms;}
+  .lg-auth-card > *:nth-child(3){animation-delay:140ms;}
+  .lg-auth-card > *:nth-child(4){animation-delay:170ms;}
+  .lg-auth-card > *:nth-child(5){animation-delay:200ms;}
+  .lg-auth-card > *:nth-child(6){animation-delay:225ms;}
+  .lg-auth-card > *:nth-child(7){animation-delay:250ms;}
+  .lg-auth-card > *:nth-child(n+8){animation-delay:275ms;}
+
+  /* Things that appear on demand — occasional, so a standard entrance is right. */
+  .lg-alarm{ animation:lg-drop 260ms var(--ease-out) both; }
+  .pay-form,.guide-block{ animation:lg-rise 180ms var(--ease-out) both; }
+  .lg-overlay{ animation:lg-fade 180ms var(--ease-out) both; }
+  /* Modals stay centred — unlike a popover, they are not anchored to a trigger. */
+  .lg-receipt{ animation:lg-rise 260ms var(--ease-out) both; transform-origin:center; }
+
+  /* Reduced motion means gentler, not none: keep the opacity cues that explain
+     what appeared, drop everything that moves. */
+  @media (prefers-reduced-motion: reduce){
+    #lg-content.lg-enter,.lg-auth-card,.lg-auth-card > *,
+    .lg-alarm,.pay-form,.guide-block,.lg-receipt{
+      animation:lg-fade 160ms ease both;
+    }
+    .lg-btn:active,.lg-tab:active,.subtle-link:active,.owed-pay:active{transform:none;}
+    .toast{transition:opacity 200ms ease;transform:none;}
+    .toast.show{transform:none;}
+  }
 
   /* ---- Sign-in gate ---- */
   /* The ledger is hidden until Firebase Auth confirms a signed-in user, so the books
@@ -334,7 +425,7 @@
      is never briefly painted to someone who isn't logged in. -->
 <div id="lg-auth">
   <form class="lg-auth-card" id="lg-auth-form" autocomplete="on">
-    <h1>JOB LEDGER</h1>
+    <h1>OKTOPUS LEDGER</h1>
     <div class="lg-auth-sub">Sign in to continue</div>
     <label for="lg-auth-email">Email</label>
     <input type="email" id="lg-auth-email" autocomplete="username" required>
@@ -353,7 +444,7 @@
   <div class="lg-shell">
     <div class="lg-header">
       <div>
-        <div class="lg-title">JOB LEDGER</div>
+        <div class="lg-title">OKTOPUS LEDGER</div>
         <div class="lg-sub">Intake &middot; Production &middot; Delivery &middot; Cash Record</div>
       </div>
       <div class="lg-header-meta">
@@ -1563,10 +1654,22 @@
     });
   }
 
+  // renderAll() runs on far more than tab changes — recording a payment, changing a
+  // status, a debounced search keystroke all land here and replace #lg-content
+  // wholesale. Replaying an entrance on each of those would make routine data entry
+  // feel like it stutters, so the animation is gated on the tab genuinely changing.
+  let lastRenderedTab = null;
   function renderAll(){
     renderTabs();
     if(!state.loaded){ content.innerHTML = '<div class="lg-empty">Loading ledger…</div>'; return; }
     renderAlarm();
+    const tabChanged = state.tab !== lastRenderedTab;
+    lastRenderedTab = state.tab;
+    if(tabChanged) queueMicrotask(()=>{
+      content.classList.remove('lg-enter');
+      void content.offsetWidth;          // reflow, so the animation restarts rather than being ignored
+      content.classList.add('lg-enter');
+    });
     if(state.tab==='dashboard') renderDashboard();
     else if(state.tab==='dayview') renderDayView();
     else if(state.tab==='summary') renderSummary();

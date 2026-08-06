@@ -1,4 +1,4 @@
-# The Daybook — Job Ledger
+# Oktopus Ledger
 
 A single-file business management app for the print shop: job pipeline, pricing,
 customer debt tracking, receipts, stock purchases, and profit/tithe splits —

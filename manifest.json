@@ -1,6 +1,6 @@
 {
-  "name": "Job Ledger — Oktopus",
-  "short_name": "Job Ledger",
+  "name": "Oktopus Ledger",
+  "short_name": "Oktopus",
   "description": "Intake, production, delivery and cash record ledger.",
   "start_url": "./",
   "scope": "./",
