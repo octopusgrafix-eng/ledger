@@ -16,7 +16,7 @@
  * Bump CACHE_VERSION whenever the cached asset list changes.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = 'daybook-' + CACHE_VERSION;
 
 const SHELL_URL = './index.html';
@@ -33,6 +33,13 @@ self.addEventListener('install', (event)=>{
     const cache = await caches.open(CACHE_NAME);
     // The shell must cache for the worker to be worth installing at all.
     await cache.addAll(['./', SHELL_URL]);
+    // Manifest and icons are best-effort — an installed app that briefly can't
+    // re-fetch its own icon is better than a worker that refuses to install.
+    await Promise.all(
+      ['./manifest.json', './icon-192.png', './icon-512.png',
+       './icon-maskable-512.png', './apple-touch-icon.png']
+        .map(url => cache.add(url).catch(()=>{}))
+    );
     // The CDN scripts are best-effort: if gstatic is unreachable while installing,
     // still activate rather than leaving the user with no worker.
     await Promise.all(CDN_ASSETS.map(url=>
