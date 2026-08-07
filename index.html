@@ -322,7 +322,42 @@
   .lg-target .tg-pace{font-size:12px;margin-top:7px;}
   .lg-target .tg-pace.ok{color:var(--green);}
   .lg-target .tg-pace.behind{color:var(--clay);}
-  @media (prefers-reduced-motion: reduce){ .lg-target .tg-bar > span{transition:none;} }
+  .lg-target .tg-carry{
+    font-size:11px;color:var(--muted);margin-top:7px;
+    padding-top:7px;border-top:1px dashed var(--rule);
+  }
+  /* Distance from target, as colour. Clay → amber → green, the same three the rest of the
+     app uses for debt / warning / paid, so the bar means what those already mean. The card's
+     left edge and the percentage move with the bar, so the state reads at a glance without
+     having to parse the number. */
+  .lg-target.tg-far    .tg-bar > span{background:linear-gradient(90deg,#8C2F1B,var(--clay));}
+  .lg-target.tg-mid    .tg-bar > span{background:linear-gradient(90deg,var(--clay),var(--amber));}
+  .lg-target.tg-close  .tg-bar > span{background:linear-gradient(90deg,var(--amber),#5C8F3A);}
+  .lg-target.tg-met    .tg-bar > span{background:linear-gradient(90deg,#5C8F3A,var(--green));}
+  .lg-target.tg-far    {border-left-color:var(--clay);}
+  .lg-target.tg-mid    {border-left-color:var(--amber);}
+  .lg-target.tg-close  {border-left-color:var(--amber);}
+  .lg-target.tg-met    {border-left-color:var(--green);}
+  .lg-target.tg-far    .tg-pct{color:var(--clay);}
+  .lg-target.tg-mid    .tg-pct{color:var(--amber);}
+  .lg-target.tg-close  .tg-pct{color:var(--amber);}
+  .lg-target.tg-met    .tg-pct{color:var(--green);}
+  .lg-target .tg-bar > span{transition:width 520ms var(--ease-out), background 420ms linear;}
+  .lg-target .tg-pct{transition:color 420ms linear;}
+  .lg-target{transition:border-left-color 420ms linear;}
+  /* Hitting the day's target is worth one beat of acknowledgement. Once, on the render that
+     first shows it met — not on every payment recorded afterwards, which is why the class is
+     added by script rather than sitting in the markup. */
+  @keyframes tg-hit{
+    0%{transform:scale(1);}
+    40%{transform:scale(1.012);}
+    100%{transform:scale(1);}
+  }
+  .lg-target.tg-just-hit{animation:tg-hit 460ms var(--ease-out);}
+  @media (prefers-reduced-motion: reduce){
+    .lg-target .tg-bar > span{transition:none;}
+    .lg-target.tg-just-hit{animation:none;}
+  }
 
   /* ---- Motion ----
      Budgeted by how often a thing is seen. The sign-in screen happens once per
@@ -1717,12 +1752,14 @@
 
     let achieved=0, weekAchieved=0, todayAchieved=0;
     let workDaysTotal=0, workDaysSoFar=0, weekWorkDays=0;
+    const valByDay = {};
     for(let d=1; d<=nDays; d++){
       const date = dateFor(d);
       // Same Net Profit formula as dayStats(), monthStats() and the Summary day table — all four
       // must stay in step, or the target card reports progress against a figure the Summary denies.
       const net = Math.max(paidByDay[date] - cpByDay[date] - matUsedByDay[date] - matWasteByDay[date], 0);
       const val = net * sharePct/100;
+      valByDay[date] = val;
       const work = isWorkDay(date);
       if(work) workDaysTotal++;
       if(work && isoWeekLabel(date)===thisWeek) weekWorkDays++;
@@ -1735,6 +1772,26 @@
     }
 
     const dailyTarget  = workDaysTotal ? target/workDaysTotal : 0;
+
+    // Carry-forward. A day that falls short hands the shortfall to the next day, so the figure
+    // on Daily View is what today actually has to bring in — not a flat monthly average that
+    // quietly ignores the ground already lost. Beating the target clears the carry and any
+    // surplus beyond it simply doesn't roll forward (the month total already counts it).
+    // Sundays carry a debt but never add a fresh share of their own; earning on one still
+    // pays the carry down.
+    let carry = 0, todayRequired = dailyTarget, todayCarriedIn = 0, missedDays = 0;
+    for(let d=1; d<=nDays; d++){
+      const date = dateFor(d);
+      if(date > today) break;
+      const required = (isWorkDay(date) ? dailyTarget : 0) + carry;
+      if(date === today){ todayRequired = required; todayCarriedIn = carry; break; }
+      const short = Math.max(required - valByDay[date], 0);
+      // Only a working day can "fall short" — a Sunday carries a debt forward but was never
+      // given a share of its own, so counting it would overstate how many days were missed.
+      if(short > 0 && isWorkDay(date)) missedDays++;
+      carry = short;
+    }
+
     const weeklyTarget = dailyTarget * weekWorkDays;
     const expected     = dailyTarget * workDaysSoFar;   // where you should stand by tonight
     const remaining    = Math.max(target - achieved, 0);
@@ -1743,6 +1800,10 @@
       target, achieved, remaining,
       pct: target ? Math.min(achieved/target, 1) : 0,
       dailyTarget, weeklyTarget, weekAchieved, todayAchieved,
+      todayRequired, todayCarriedIn, missedDays,
+      todayPct: todayRequired>0 ? Math.min(todayAchieved/todayRequired, 1) : (todayAchieved>0?1:0),
+      todayRatio: todayRequired>0 ? todayAchieved/todayRequired : (todayAchieved>0?1:0),
+      isWorkDayToday: isWorkDay(today),
       expected, pace: achieved - expected,
       workDaysTotal, workDaysSoFar, daysLeft,
       // What each remaining day has to bring in to still finish on target. Recomputed
@@ -1753,19 +1814,32 @@
     };
   }
 
-  function renderTargetCard(){
-    const t = targetStats();
-    if(!t.target){
-      return `<div class="lg-card lg-target">
-        <div class="lg-card-title">Monthly Target</div>
-        <div style="font-size:12.5px;color:var(--muted);">
-          No target set. Add one on the <b>Summary</b> tab and this shows what you need
-          each week and each day to reach it.
-        </div>
-      </div>`;
-    }
-    const ahead = t.pace >= 0;
+  // How close a figure is to its target, as one of the semantic colours. Red through amber to
+  // green — the bands are discrete rather than a continuous hue ramp because clay/amber/green
+  // already carry meaning everywhere else in the app, and inventing in-between hues would blur it.
+  function targetBand(ratio){
+    if(ratio >= 1)    return 'met';
+    if(ratio >= 0.75) return 'close';
+    if(ratio >= 0.40) return 'mid';
+    return 'far';
+  }
+  function emptyTargetCard(title){
     return `<div class="lg-card lg-target">
+      <div class="lg-card-title">${title}</div>
+      <div style="font-size:12.5px;color:var(--muted);">
+        No target set. Add one on the <b>Summary</b> tab and this shows what you need
+        each week and each day to reach it.
+      </div>
+    </div>`;
+  }
+
+  // The whole month at a glance — lives on the Dashboard.
+  function renderMonthTargetCard(){
+    const t = targetStats();
+    if(!t.target) return emptyTargetCard('Monthly Target');
+    const ahead = t.pace >= 0;
+    const band = targetBand(t.pct);
+    return `<div class="lg-card lg-target tg-${band}">
       <div class="lg-card-title">Monthly Target — ${t.monthLabel} <span class="muted" style="text-transform:none;letter-spacing:0;">· counting ${t.basisLabel}</span></div>
       <div class="tg-head">
         <div class="tg-big">${naira(t.achieved)} <span class="tg-of">of ${naira(t.target)}</span></div>
@@ -1779,9 +1853,36 @@
       </div>
       <div class="lg-grid cols-3" style="margin-top:12px;">
         <div class="lg-kpi teal"><div class="num">${naira(t.weekAchieved)}</div><div class="lbl">This week of ${naira(t.weeklyTarget)}</div></div>
-        <div class="lg-kpi paid"><div class="num">${naira(t.todayAchieved)}</div><div class="lbl">Today of ${naira(t.dailyTarget)}</div></div>
+        <div class="lg-kpi paid"><div class="num">${naira(t.achieved)}</div><div class="lbl">Month so far · ${t.workDaysSoFar} of ${t.workDaysTotal} working days</div></div>
         <div class="lg-kpi" style="border-left-color:var(--ok-blue);"><div class="num">${naira(t.neededPerDay)}</div><div class="lbl">Needed / day · ${t.daysLeft} day${t.daysLeft===1?'':'s'} left</div></div>
       </div>
+    </div>`;
+  }
+
+  // Just today — lives on Daily View. Carries forward whatever earlier days fell short by,
+  // so this is the one number that says what the day actually has to bring in.
+  function renderDayTargetCard(){
+    const t = targetStats();
+    if(!t.target) return emptyTargetCard("Today's Target");
+    const band = targetBand(t.todayRatio);
+    const over = t.todayAchieved - t.todayRequired;
+    const short = t.todayRequired - t.todayAchieved;
+    return `<div class="lg-card lg-target tg-${band}">
+      <div class="lg-card-title">Today's Target — ${fmtDate(todayISO())} <span class="muted" style="text-transform:none;letter-spacing:0;">· counting ${t.basisLabel}</span></div>
+      <div class="tg-head">
+        <div class="tg-big">${naira(t.todayAchieved)} <span class="tg-of">of ${naira(t.todayRequired)}</span></div>
+        <div class="tg-pct">${Math.round(t.todayRatio*100)}%</div>
+      </div>
+      <div class="tg-bar"><span style="width:${(t.todayPct*100).toFixed(1)}%"></span></div>
+      <div class="tg-pace ${band==='met'?'ok':'behind'}">
+        ${band==='met'
+          ? `Target met${over>0?` — ${naira(over)} over`:''}. Nothing carries to tomorrow.`
+          : `${naira(short)} to go today${t.todayCarriedIn>0?` — closes tonight and carries to tomorrow if not`:''}`}
+      </div>
+      ${t.todayCarriedIn>0 ? `<div class="tg-carry">
+        Includes <b>${naira(t.todayCarriedIn)}</b> brought forward from ${t.missedDays} earlier day${t.missedDays===1?'':'s'} that fell short — the plain daily share is ${naira(t.dailyTarget)}.
+      </div>` : ''}
+      ${!t.isWorkDayToday ? `<div class="tg-carry">Today is a rest day, so no new share was added${t.todayCarriedIn>0?' — this is carried-forward ground only':''}.</div>` : ''}
     </div>`;
   }
 
@@ -1798,6 +1899,7 @@
   // wholesale. Replaying an entrance on each of those would make routine data entry
   // feel like it stutters, so the animation is gated on the tab genuinely changing.
   let lastRenderedTab = null;
+  let lastDayTargetMet = null;   // null until the first Daily View paint, so it never animates on load
   function renderAll(){
     renderTabs();
     if(!state.loaded){ content.innerHTML = '<div class="lg-empty">Loading ledger…</div>'; return; }
@@ -1858,6 +1960,7 @@
       return Number(mt.reorderLevel||0)>0 && remaining <= Number(mt.reorderLevel||0);
     });
     content.innerHTML = `
+      ${renderMonthTargetCard()}
       <div class="lg-grid cols-4">
         <div class="lg-card lg-kpi"><div class="num">${naira(m.todayBilled)}</div><div class="lbl">Billed Today</div></div>
         <div class="lg-card lg-kpi paid"><div class="num">${naira(m.todayJobIncome)}</div><div class="lbl">Income for Today</div></div>
@@ -1968,7 +2071,7 @@
   function renderDayView(){
     const d = dayStats(dayViewDate);
     content.innerHTML = `
-      ${renderTargetCard()}
+      ${dayViewDate===todayISO() ? renderDayTargetCard() : ''}
       <div class="lg-card">
         <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
           <div><label style="margin-top:0">Date</label><input id="dv-date" type="date" value="${dayViewDate}"></div>
@@ -2027,6 +2130,16 @@
         <tbody>${d.expensesToday.map(e=>`<tr><td>${esc(e.category)||'\u2014'}</td><td class="muted">${esc(e.note)||'\u2014'}</td><td class="num-col">${naira(e.amount)}</td></tr>`).join('')}</tbody></table>`}
       </div>
     `;
+    // One beat of acknowledgement the first time today's target goes green — not on every
+    // payment recorded afterwards, and not on the first paint of an already-met day, which
+    // would fire on every tab change. Tracked across renders rather than baked into markup.
+    (()=>{
+      const card = content.querySelector('.lg-target');
+      if(!card) return;
+      const met = card.classList.contains('tg-met');
+      if(met && lastDayTargetMet === false) card.classList.add('tg-just-hit');
+      lastDayTargetMet = met;
+    })();
     document.getElementById('dv-date').addEventListener('change', (e)=>{ dayViewDate = e.target.value || todayISO(); renderDayView(); });
     document.getElementById('dv-prev').addEventListener('click', ()=>{ dayViewDate = shiftDate(dayViewDate,-1); renderDayView(); });
     document.getElementById('dv-next').addEventListener('click', ()=>{ dayViewDate = shiftDate(dayViewDate,1); renderDayView(); });

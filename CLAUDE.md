@@ -88,6 +88,18 @@ Motion is budgeted by frequency, not applied evenly. Sign-in is once per device
 and gets a staged entrance; tab content gets 200ms and only on a real change;
 presses get 140ms; repeated actions get nothing.
 
+## Testing target/profit logic without the owner's data
+
+The preview loses the signed-in session easily, and signing back in needs the
+owner's password. To exercise this logic anyway: copy `index.html` to
+`_target-test.html` **inside the project folder** (a scratchpad path renders as a
+static snapshot and won't run scripts), and inject a seed block just before
+`const ready = await waitForFirebase(8000);` that fills `state`, sets
+`state.loaded`, unhides `ledger-root`, and calls `renderTabs(); renderAll();`
+then returns — that short-circuits Firebase entirely. Expose a
+`window.__SEED(pairs)` helper so scenarios can be swapped without reloading.
+Delete the copy afterwards; it is not gitignored.
+
 ## Open items
 
 - **Netlify (`oktopusaccount.netlify.app`) is frozen** on a pre-sign-in build,
