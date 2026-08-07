@@ -516,6 +516,7 @@
         <div class="lg-date" id="lg-storage-mode" style="font-size:10.5px;opacity:.85;margin-top:2px;"></div>
         <div class="lg-date" id="lg-last-saved" style="font-size:10.5px;opacity:.85;margin-top:2px;"></div>
         <div class="lg-header-actions">
+          <button class="lg-btn ghost small" id="lg-refresh-btn" type="button" title="Save now, reconnect live sync, and check for a new version of the app">⟳ Refresh</button>
           <button class="lg-btn ghost small" id="lg-backup-btn" type="button" title="Download all your data as a file you can keep safe">⬇ Backup</button>
           <button class="lg-btn ghost small" id="lg-restore-btn" type="button" title="Load a backup file back in">⬆ Restore</button>
           <button class="lg-btn danger small" id="lg-clear-btn" type="button" title="Wipe everything and start fresh">🗑 Clear All Data</button>
@@ -666,7 +667,20 @@
     n = Number(n)||0;
     return '₦' + n.toLocaleString('en-NG',{maximumFractionDigits:0});
   }
-  function normName(s){ return (s||'').trim().toUpperCase(); }
+  function normName(s){ return (s||'').trim().replace(/\s+/g,' ').toUpperCase(); }
+  // Anonymous counter sales: someone who wouldn't give a name, or a ₦50 photocopy taken
+  // in a hurry. Every spelling of that is ONE bucket, and it is not a customer — the money
+  // is real and stays in every total, but there is no relationship to track, no debt worth
+  // chasing, and it has no business being ranked in Top Customers. WALK IN and WALKIN were
+  // being counted as two separate people until this existed.
+  const WALKIN = 'WALKIN';
+  function isWalkin(name){
+    const n = normName(name);
+    return !n || n === WALKIN || /^WALK[ -]?INS?$/.test(n);
+  }
+  // The key a customer is filed under. Named customers key on their own normalised name;
+  // every anonymous variant collapses onto WALKIN.
+  function custKey(name){ return isWalkin(name) ? WALKIN : normName(name); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   // ---------- payment method (cash vs bank transfer) ----------
   // CP spends and expenses each carry ONE method. Job payments are different: a single
@@ -970,6 +984,46 @@
       }
     );
   }
+  // The Refresh button. Figures arrive on their own through the live subscription, so this
+  // isn't for pulling data down — it's for the three things that can silently go stale:
+  // an unsaved edit, a dropped sync listener, and a cached build that's a version behind
+  // (the service worker serves the old shell first and only fetches the new one afterwards).
+  let refreshing = false;
+  async function refreshNow(){
+    if(refreshing) return;
+    refreshing = true;
+    const btn = document.getElementById('lg-refresh-btn');
+    if(btn){ btn.disabled = true; btn.textContent = '⟳ Refreshing…'; }
+    const restore = ()=>{ if(btn){ btn.disabled = false; btn.textContent = '⟳ Refresh'; } };
+    let reloadPending = false;
+    try{
+      try{ await autoSaveAll(); }catch(e){ /* offline — the local cache still holds it */ }
+      // Re-attach the snapshot listener. Harmless when it's already healthy (subscribeToCloud
+      // drops the old one first), and the only way back when it errored out.
+      if(currentUid){ try{ subscribeToCloud(); updateStorageModeLabel(); }catch(e){} }
+      recomputeAllCustomers();
+      renderAll();
+      let status = 'unsupported';
+      if(typeof window.__lgCheckUpdate === 'function') status = await window.__lgCheckUpdate();
+      if(status === 'updating'){
+        // controllerchange reloads the page from here. Leave the button spent rather than
+        // handing back a live control for the second or two before the page goes away.
+        if(btn) btn.textContent = '⟳ Reloading…';
+        toast('New version found — reloading…');
+        reloadPending = true;
+        return;
+      }
+      toast(status === 'error'
+        ? 'Refreshed — could not check for a new version'
+        : 'Refreshed — you have the latest version');
+    }catch(err){
+      console.error('Refresh failed:', err);
+      toast('Refresh failed — check your connection');
+    }finally{
+      if(!reloadPending){ refreshing = false; restore(); }
+    }
+  }
+
   let cloudFirstLoadDone = null;
   function onCloudFirstLoad(){ if(cloudFirstLoadDone){ cloudFirstLoadDone(); cloudFirstLoadDone = null; } }
 
@@ -1614,15 +1668,31 @@
     // then fold in stats from every job — adding any customer typed on a job that isn't in the roster.
     const map = new Map();
     state.customers.forEach(c=>{
-      if(c.name === 'WALKIN') return;
-      map.set(c.name, {name:c.name, phone:c.phone||'', jobCount:0, totalBilled:0, totalPaid:0, totalDebt:0, lastDate:c.lastDate||'',
-        openingDebt: Number(c.openingDebt)||0, openingDebtPayments: c.openingDebtPayments||[]});
+      // Filed under custKey(), so two roster rows that differ only by spacing or a hyphen
+      // land on the same record. The old `c.name === 'WALKIN'` skip was dead code: the job
+      // loop below re-added the bucket immediately, so it never actually excluded anything.
+      const key = custKey(c.name);
+      if(map.has(key)){
+        // A collision means a genuine merge (WALK IN folding into WALKIN). Add the two
+        // together rather than letting the later row overwrite the earlier one — silently
+        // dropping an opening debt here would erase money someone still owes.
+        const e = map.get(key);
+        e.openingDebt += Number(c.openingDebt)||0;
+        e.openingDebtPayments = e.openingDebtPayments.concat(c.openingDebtPayments||[]);
+        if(!e.phone && c.phone) e.phone = c.phone;
+        if(c.lastDate && c.lastDate > e.lastDate) e.lastDate = c.lastDate;
+        return;
+      }
+      map.set(key, {name:key, phone:c.phone||'', jobCount:0, totalBilled:0, totalPaid:0, totalDebt:0, lastDate:c.lastDate||'',
+        openingDebt: Number(c.openingDebt)||0, openingDebtPayments: (c.openingDebtPayments||[]).slice()});
     });
     state.jobs.forEach(j=>{
-      const key = normName(j.customerName || 'WALKIN');
+      const key = custKey(j.customerName);
       if(!map.has(key)) map.set(key, {name:key, phone:'', jobCount:0, totalBilled:0, totalPaid:0, totalDebt:0, lastDate:'', openingDebt:0, openingDebtPayments:[]});
       const c = map.get(key);
-      if(j.phone) c.phone = j.phone;
+      // A number left on one anonymous sale doesn't belong to the next one, so the shared
+      // bucket never takes a phone from a job.
+      if(j.phone && key !== WALKIN) c.phone = j.phone;
       const t = jobTotals(j);
       c.jobCount += 1;
       c.totalBilled += t.totalBilled;
@@ -2413,9 +2483,13 @@
     }));
     const topServices = Array.from(svcMap.values()).filter(x=>x.value>0).sort((a,b)=>b.value-a.value).slice(0,6);
     const custMap = new Map();
+    let walkinJobs = 0, walkinBilled = 0;
     monthJobsList.forEach(j=>{
-      const key = normName(j.customerName || 'WALKIN');
+      const key = custKey(j.customerName);
       const t = jobTotals(j);
+      // Counter sales are money, not a customer — kept out of the ranking but reported
+      // underneath it, so the total still reconciles with Billed This Month.
+      if(key === WALKIN){ walkinJobs += 1; walkinBilled += t.totalBilled; return; }
       if(!custMap.has(key)) custMap.set(key, {name:key, jobs:0, billed:0, debt:0});
       const e = custMap.get(key); e.jobs += 1; e.billed += t.totalBilled; e.debt += t.debt;
     });
@@ -5466,6 +5540,7 @@
     authEl.hidden = true;
     document.getElementById('ledger-root').hidden = false;
     renderTabs();
+    document.getElementById('lg-refresh-btn').addEventListener('click', refreshNow);
     document.getElementById('lg-backup-btn').addEventListener('click', downloadBackup);
     document.getElementById('lg-restore-btn').addEventListener('click', ()=>{
       document.getElementById('lg-restore-file').click();
@@ -5576,9 +5651,45 @@
     document.body.appendChild(bar);
   }
 
+  // reg.update() resolves as soon as the CHECK finishes, which is before a newly found
+  // worker has finished installing — so asking for reg.waiting straight after usually
+  // finds nothing. This waits for the installing worker to reach a settled state.
+  function waitForWaiting(reg, ms){
+    return new Promise(function(resolve){
+      if(reg.waiting) return resolve(reg.waiting);
+      var inst = reg.installing;
+      if(!inst) return resolve(null);
+      var settled = false;
+      var timer = setTimeout(function(){
+        if(!settled){ settled = true; resolve(reg.waiting || null); }
+      }, ms || 8000);
+      inst.addEventListener('statechange', function(){
+        if(settled) return;
+        if(inst.state === 'installed'){ settled = true; clearTimeout(timer); resolve(reg.waiting || inst); }
+        else if(inst.state === 'redundant'){ settled = true; clearTimeout(timer); resolve(null); }
+      });
+    });
+  }
+
   navigator.serviceWorker.register('sw.js').then(function(reg){
     // A new worker was already waiting when this page loaded.
     if(reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg.waiting);
+
+    // Bridge for the Refresh button, which lives inside the app's own closure and can't
+    // see `reg`. Resolves 'updating' once a new worker has been told to take over — the
+    // existing controllerchange handler does the reload from there.
+    window.__lgCheckUpdate = function(){
+      return reg.update()
+        .then(function(){ return waitForWaiting(reg, 8000); })
+        .then(function(worker){
+          if(worker && navigator.serviceWorker.controller){
+            worker.postMessage({type:'SKIP_WAITING'});
+            return 'updating';
+          }
+          return 'current';
+        })
+        .catch(function(){ return 'error'; });
+    };
 
     reg.addEventListener('updatefound', function(){
       var installing = reg.installing;

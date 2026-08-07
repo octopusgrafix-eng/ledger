@@ -93,6 +93,14 @@ null. A `window.firebase && firebase.auth` guard passes and then the call blows
 up; inside a Promise executor that rejects silently and the button just does
 nothing. Wrap it in try/catch and treat the throw as "not signed in".
 
+**The service worker serves the shell stale-while-revalidate**, so a deploy only
+appears on the *next* open — the visit after a push still shows the old build and
+caches the new one behind it. The Refresh button (`refreshNow`) forces the check:
+it calls `window.__lgCheckUpdate`, a bridge exposed by the SW registration script,
+which lives outside the app IIFE and is the only thing holding `reg`. Note
+`reg.update()` resolves when the *check* finishes, not when a found worker has
+installed — read `reg.waiting` too early and you'll always see nothing.
+
 ## Testing target/profit logic without the owner's data
 
 The preview loses the signed-in session easily, and signing back in needs the
