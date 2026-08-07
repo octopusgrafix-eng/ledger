@@ -88,6 +88,11 @@ Motion is budgeted by frequency, not applied evenly. Sign-in is once per device
 and gets a staged entrance; tab content gets 200ms and only on a real change;
 presses get 140ms; repeated actions get nothing.
 
+**`firebase.auth()` throws when the app never initialised** — it does not return
+null. A `window.firebase && firebase.auth` guard passes and then the call blows
+up; inside a Promise executor that rejects silently and the button just does
+nothing. Wrap it in try/catch and treat the throw as "not signed in".
+
 ## Testing target/profit logic without the owner's data
 
 The preview loses the signed-in session easily, and signing back in needs the
@@ -100,6 +105,13 @@ then returns — that short-circuits Firebase entirely. Expose a
 `window.__SEED(pairs)` helper so scenarios can be swapped without reloading.
 Delete the copy afterwards; it is not gitignored.
 
+The header buttons (Backup / Restore / Clear) are wired in `startLedger()`, which
+the harness skips — clicking them does nothing there. Expose the handlers on
+`window` from the seed block instead. `requirePassword` can be driven by stubbing
+`window.firebase` with a fake `currentUser` and an `EmailAuthProvider.credential`
+that only accepts a chosen literal; it reads `window.firebase` at call time, so
+the stub can be swapped in and out around a single call.
+
 ## Open items
 
 - **Netlify (`oktopusaccount.netlify.app`) is frozen** on a pre-sign-in build,
@@ -109,6 +121,14 @@ Delete the copy afterwards; it is not gitignored.
   × 65% = ₦8.45m. Because the app divides by the *current* month's working days
   (24–27 across 2026), a fixed target drifts the daily figure — ₦8.45m is ₦500k/day
   in August but ₦521k in February. Revisit if they want exactly ₦500k every month.
+- **The daily target carries both ways.** `targetStats()` keeps a signed running
+  `deficit`: a day that falls short raises tomorrow's figure, a day that beats it
+  lowers tomorrow's. Today's required is clamped at 0 (a big enough surplus means
+  today needs nothing) but the surplus itself keeps rolling. Sundays never add a
+  share and never count as "missed", though a debt can sit on one and earning on
+  one pays it down. With the ₦8.45m target and a slow month, the carried figure
+  gets large fast — if the owner would rather it reset weekly, that's a change to
+  the loop, not the card.
 - **Stage timestamps only exist going forward.** Jobs predating the feature can't
   be timed; production-speed averages stay empty until new jobs flow through.
 - **Untested write paths**: saving a corrected stage time, saving a customer

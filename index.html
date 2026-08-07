@@ -248,6 +248,12 @@
   .lg-receipt .r-title{text-align:center; font-weight:700; font-size:13px; letter-spacing:1px; margin:8px 0;}
   .lg-receipt .r-items div{font-size:12px; margin-bottom:2px;}
   .lg-receipt .r-foot{text-align:center; font-size:11px; color:#666; margin-top:10px;}
+  /* Password gate on the two irreversible actions. Deliberately plain — the warning is the
+     point, so it gets clay and weight while everything around it stays quiet. */
+  .pw-warn{font-size:12.5px; line-height:1.5; color:var(--clay); background:rgba(171,69,48,.07);
+    border-left:3px solid var(--clay); padding:9px 11px; border-radius:0 4px 4px 0;}
+  .pw-msg{font-size:11.5px; min-height:15px; margin-top:6px;}
+  .pw-msg.err{color:var(--clay); font-weight:600;}
   .lg-receipt-actions{display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap;}
   .lg-receipt-actions .lg-btn{flex:1; text-align:center;}
   /* Computed figures shown beside inputs. Rendered as text, not a disabled input —
@@ -1110,6 +1116,73 @@
       return false;
     }
   }
+  // Clearing the ledger and overwriting it from a backup are the two actions with no undo,
+  // and the header keeps them one tap away — easy for someone borrowing the phone to hit.
+  // Both now ask for the account password and check it against Firebase: nothing is stored,
+  // nothing is compared in the page, and the real password never lands in state. Fails
+  // closed — if the check can't run (offline, signed out) the action simply doesn't happen,
+  // which is the safe direction for something irreversible.
+  function requirePassword({title, warning, confirmLabel}){
+    return new Promise(resolve=>{
+      // firebase.auth() THROWS if the app never initialised — it doesn't return null. Letting
+      // that escape rejected the promise and left the button silently dead, so it's caught here
+      // and treated as "cannot verify", which still refuses the action but says why.
+      let user = null;
+      try{ user = (window.firebase && firebase.auth) ? firebase.auth().currentUser : null; }
+      catch(e){ user = null; }
+      if(!user || !user.email){
+        toast('Cannot check your password right now — sign in again, or check your connection');
+        resolve(false); return;
+      }
+      const root = document.getElementById('lg-modal-root');
+      root.innerHTML = `
+        <div class="lg-overlay" id="pw-overlay">
+          <div class="lg-receipt">
+            <h2>${esc(title)}</h2>
+            <div class="r-sub">Signed in as ${esc(user.email)}</div>
+            <div class="r-dashed"></div>
+            <div class="pw-warn">${warning}</div>
+            <label for="pw-input" style="display:block;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#555;margin:12px 0 4px;">Account password</label>
+            <input type="password" id="pw-input" autocomplete="current-password" placeholder="Your sign-in password"
+                   style="width:100%;padding:9px 10px;border:1px solid #bbb;border-radius:4px;font-family:var(--font-mono);font-size:13px;">
+            <div class="pw-msg" id="pw-msg"></div>
+            <div class="lg-receipt-actions">
+              <button class="lg-btn danger small" id="pw-go" type="button">${esc(confirmLabel)}</button>
+              <button class="lg-btn ghost small" id="pw-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>`;
+      const input = document.getElementById('pw-input');
+      const msg   = document.getElementById('pw-msg');
+      const go    = document.getElementById('pw-go');
+      const done  = (ok)=>{ root.innerHTML=''; resolve(ok); };
+      document.getElementById('pw-cancel').addEventListener('click', ()=>done(false));
+      document.getElementById('pw-overlay').addEventListener('click', (e)=>{
+        if(e.target.id==='pw-overlay') done(false);
+      });
+      input.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); go.click(); } });
+      go.addEventListener('click', async ()=>{
+        const pass = input.value;
+        if(!pass){ msg.textContent = 'Enter your password to continue.'; msg.className='pw-msg err'; input.focus(); return; }
+        go.disabled = true; go.textContent = 'Checking…';
+        try{
+          const cred = firebase.auth.EmailAuthProvider.credential(user.email, pass);
+          await user.reauthenticateWithCredential(cred);
+          done(true);
+        }catch(err){
+          const code = err && err.code;
+          msg.textContent = (code==='auth/wrong-password' || code==='auth/invalid-credential')
+            ? 'That password is not correct.'
+            : friendlyAuthError(code).replace('Could not sign in.', 'Could not check the password.');
+          msg.className = 'pw-msg err';
+          go.disabled = false; go.textContent = confirmLabel;
+          input.value = ''; input.focus();
+        }
+      });
+      setTimeout(()=>input.focus(), 40);
+    });
+  }
+
   async function restoreBackup(file){
     let parsed;
     try{
@@ -1124,7 +1197,15 @@
       toast('That file doesn\'t look like a DAYBOOK backup');
       return;
     }
-    if(!confirm('This will REPLACE everything currently in the app with the contents of this backup. Continue?')) return;
+    const jobCount = (d.jobs||[]).length, custCount = (d.customers||[]).length;
+    const ok = await requirePassword({
+      title: 'Restore from backup',
+      warning: `This <b>replaces everything</b> currently in the ledger with the contents of this file
+                — ${jobCount} job${jobCount===1?'':'s'} and ${custCount} customer${custCount===1?'':'s'}.
+                Your current ${state.jobs.length} job${state.jobs.length===1?'':'s'} will be gone. There is no undo.`,
+      confirmLabel: 'Replace everything'
+    });
+    if(!ok) return;
     state.jobs = d.jobs || [];
     state.pricelist = d.pricelist || [];
     state.customers = d.customers || [];
@@ -1156,10 +1237,21 @@
         toast('Clearing cancelled — backup could not be created');
         return;
       }
-      const reallyDelete = confirm('Backup downloaded. Now actually clear everything and start fresh?');
+      const reallyDelete = await requirePassword({
+        title: 'Clear all data',
+        warning: `Backup downloaded. This now <b>permanently deletes</b> ${state.jobs.length} job${state.jobs.length===1?'':'s'},
+                  ${state.customers.length} customer${state.customers.length===1?'':'s'}, and every material, expense and
+                  purse record. Your shop details and Tithe/PF/EX percentages are kept. There is no undo.`,
+        confirmLabel: 'Delete everything'
+      });
       if(!reallyDelete) return;
     } else {
-      if(!confirm('Clear all data and start fresh?')) return;
+      const ok = await requirePassword({
+        title: 'Clear all data',
+        warning: 'There is nothing much to delete, but this resets the ledger to a fresh start.',
+        confirmLabel: 'Clear and start fresh'
+      });
+      if(!ok) return;
     }
     state.jobs = [];
     state.customers = [];
@@ -1773,23 +1865,24 @@
 
     const dailyTarget  = workDaysTotal ? target/workDaysTotal : 0;
 
-    // Carry-forward. A day that falls short hands the shortfall to the next day, so the figure
-    // on Daily View is what today actually has to bring in — not a flat monthly average that
-    // quietly ignores the ground already lost. Beating the target clears the carry and any
-    // surplus beyond it simply doesn't roll forward (the month total already counts it).
-    // Sundays carry a debt but never add a fresh share of their own; earning on one still
-    // pays the carry down.
-    let carry = 0, todayRequired = dailyTarget, todayCarriedIn = 0, missedDays = 0;
+    // Carry-forward, both ways. `deficit` is the running gap between what the month should
+    // have produced by now and what it actually has: positive means ground to make up,
+    // negative means you're ahead and today needs less. Either way today's figure is what
+    // the day actually has to bring in, not a flat monthly average.
+    // Sundays never add a share of their own, but a debt still sits on them and earning on
+    // one still pays it down.
+    let deficit = 0, todayRequired = dailyTarget, todayCarriedIn = 0, missedDays = 0, beatDays = 0;
     for(let d=1; d<=nDays; d++){
       const date = dateFor(d);
       if(date > today) break;
-      const required = (isWorkDay(date) ? dailyTarget : 0) + carry;
-      if(date === today){ todayRequired = required; todayCarriedIn = carry; break; }
-      const short = Math.max(required - valByDay[date], 0);
-      // Only a working day can "fall short" — a Sunday carries a debt forward but was never
-      // given a share of its own, so counting it would overstate how many days were missed.
-      if(short > 0 && isWorkDay(date)) missedDays++;
-      carry = short;
+      const share = isWorkDay(date) ? dailyTarget : 0;
+      // Clamped, because a big enough surplus means today needs nothing — not that today
+      // owes a negative amount. The surplus itself keeps rolling in `deficit`.
+      const required = Math.max(deficit + share, 0);
+      if(date === today){ todayRequired = required; todayCarriedIn = deficit; break; }
+      const got = valByDay[date];
+      if(isWorkDay(date)){ if(got < required) missedDays++; else if(got > required) beatDays++; }
+      deficit = deficit + share - got;
     }
 
     const weeklyTarget = dailyTarget * weekWorkDays;
@@ -1800,9 +1893,10 @@
       target, achieved, remaining,
       pct: target ? Math.min(achieved/target, 1) : 0,
       dailyTarget, weeklyTarget, weekAchieved, todayAchieved,
-      todayRequired, todayCarriedIn, missedDays,
-      todayPct: todayRequired>0 ? Math.min(todayAchieved/todayRequired, 1) : (todayAchieved>0?1:0),
-      todayRatio: todayRequired>0 ? todayAchieved/todayRequired : (todayAchieved>0?1:0),
+      todayRequired, todayCarriedIn, missedDays, beatDays,
+      // A required figure of 0 means the surplus already covers today — that's met, not 0%.
+      todayPct: todayRequired>0 ? Math.min(todayAchieved/todayRequired, 1) : 1,
+      todayRatio: todayRequired>0 ? todayAchieved/todayRequired : 1,
       isWorkDayToday: isWorkDay(today),
       expected, pace: achieved - expected,
       workDaysTotal, workDaysSoFar, daysLeft,
@@ -1876,13 +1970,16 @@
       <div class="tg-bar"><span style="width:${(t.todayPct*100).toFixed(1)}%"></span></div>
       <div class="tg-pace ${band==='met'?'ok':'behind'}">
         ${band==='met'
-          ? `Target met${over>0?` — ${naira(over)} over`:''}. Nothing carries to tomorrow.`
-          : `${naira(short)} to go today${t.todayCarriedIn>0?` — closes tonight and carries to tomorrow if not`:''}`}
+          ? `Target met${over>0?` — ${naira(over)} over, which carries to tomorrow`:''}.`
+          : `${naira(short)} to go today — whatever's left carries to tomorrow`}
       </div>
       ${t.todayCarriedIn>0 ? `<div class="tg-carry">
-        Includes <b>${naira(t.todayCarriedIn)}</b> brought forward from ${t.missedDays} earlier day${t.missedDays===1?'':'s'} that fell short — the plain daily share is ${naira(t.dailyTarget)}.
+        Includes <b>${naira(t.todayCarriedIn)}</b> carried over from ${t.missedDays} earlier day${t.missedDays===1?'':'s'} that fell short — the plain daily share is ${naira(t.dailyTarget)}.
       </div>` : ''}
-      ${!t.isWorkDayToday ? `<div class="tg-carry">Today is a rest day, so no new share was added${t.todayCarriedIn>0?' — this is carried-forward ground only':''}.</div>` : ''}
+      ${t.todayCarriedIn<0 ? `<div class="tg-carry">
+        You're <b>${naira(Math.abs(t.todayCarriedIn))}</b> ahead from ${t.beatDays} earlier day${t.beatDays===1?'':'s'} that beat the target, so today's share drops from ${naira(t.dailyTarget)} to <b>${naira(t.todayRequired)}</b>.
+      </div>` : ''}
+      ${!t.isWorkDayToday ? `<div class="tg-carry">Today is a rest day, so no new share was added${t.todayCarriedIn>0?' — this is carried-over ground only':''}.</div>` : ''}
     </div>`;
   }
 
