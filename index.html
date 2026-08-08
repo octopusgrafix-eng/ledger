@@ -2812,6 +2812,9 @@
           ${topCustomers.length ? `<table><thead><tr><th>Customer</th><th class="num-col">Jobs</th><th class="num-col">Billed</th><th class="num-col">Debt</th></tr></thead><tbody>
           ${topCustomers.map(x=>`<tr><td>${esc(x.name)}</td><td class="num-col">${x.jobs}</td><td class="num-col">${naira(x.billed)}</td><td class="num-col ${x.debt>0?'flag':''}">${x.debt>0?naira(x.debt):'—'}</td></tr>`).join('')}
           </tbody></table>` : '<div class="lg-empty">No jobs billed this month yet.</div>'}
+          ${walkinJobs ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;">
+            Plus ${walkinJobs} counter sale${walkinJobs===1?'':'s'} totalling ${naira(walkinBilled)} — not ranked here, but included in Billed This Month.
+          </div>` : ''}
         </div>
       </div>
 
@@ -3949,7 +3952,12 @@
   }
   function renderCustomers(){
     recomputeAllCustomers();
-    const rows = state.customers.slice().sort((a,b)=>b.totalBilled-a.totalBilled);
+    const all = state.customers.slice().sort((a,b)=>b.totalBilled-a.totalBilled);
+    // Counter sales stay in every money total, but they aren't a person you can ring, chase,
+    // or sell to again — so the roster reports them as one line rather than ranking an
+    // anonymous bucket among real customers.
+    const walkin = all.find(c=>c.name===WALKIN) || null;
+    const rows = all.filter(c=>c.name!==WALKIN);
     content.innerHTML = `
       <div class="lg-card">
         <div class="lg-card-title">Add Customer to Roster</div>
@@ -3963,6 +3971,11 @@
       <div class="lg-card">
         <div class="lg-card-title">Customers (${rows.length})</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Old Debt" is money owed from before you were tracking it here \u2014 set it once, then record payments against it as customers pay it down. It's already folded into the Debt total.</div>
+        ${walkin && walkin.jobCount ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">
+          Not listed below: <b>${walkin.jobCount} counter sale${walkin.jobCount===1?'':'s'}</b> totalling ${naira(walkin.totalBilled)}
+          \u2014 walk-ins with no name taken. Every naira of it still counts in Billed, Paid and Net Profit.${
+            walkin.totalDebt>0 ? ` <span style="color:var(--clay);">${naira(walkin.totalDebt)} of it was never paid, and with no name or number attached there is nobody to chase \u2014 worth writing off deliberately.</span>` : ''
+          }</div>` : ''}
         ${!rows.length ? '<div class="lg-empty">No customers yet</div>' : `
         <table><thead><tr>
           <th>Name</th><th>Phone</th><th class="num-col">Jobs</th><th class="num-col">Billed</th><th class="num-col">Paid</th>
