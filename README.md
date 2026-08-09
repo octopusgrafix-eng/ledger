@@ -71,8 +71,23 @@ Data is stored in three layers, in priority order:
 3. **`window.storage`** — used only when previewed inside a Claude artifact;
    irrelevant on the deployed site.
 
-If Firestore is unreachable (offline, network blocked), the app keeps working
-off the local cache and retries on the next save.
+### Working with no network
+
+The ledger keeps working with no signal at all, and **nothing entered offline is
+lost**. Writes are queued on the device (in both Firestore's own offline store
+and the browser cache) and sent up automatically the moment the network returns —
+they survive a refresh, a crash, or the machine being switched off overnight.
+
+While anything is still waiting, the line under the date reads:
+
+> ⚠ 3 changes not yet synced — saved on this device
+
+That is your signal that this one machine is holding work nothing else has yet.
+It clears itself once everything is up. While it shows: **don't clear the
+browser, and take a Backup if you can.**
+
+If the same job is edited on two devices, the more recent edit wins — the app
+compares when each was written rather than assuming the cloud is right.
 
 Access is enforced by [`firestore.rules`](firestore.rules): a ledger document is
 readable and writable only by the signed-in user whose uid matches it. Publish

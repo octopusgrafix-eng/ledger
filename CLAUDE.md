@@ -149,6 +149,51 @@ shells by path. Answering a `staff.html` navigation with `index.html` would hand
 a staff member the ledger's sign-in screen. Bump `CACHE_VERSION` when either
 shell's asset list changes.
 
+## Offline writes, and the day they were lost
+
+**7 Aug 2026: a full day of entry was destroyed on reconnect.** No network in the
+shop, data entered all day, appeared fine. Network came back, page refreshed,
+everything gone with no way back. Worth understanding, because three separate
+things had to be wrong at once and any one of them coming back reopens it.
+
+1. **Firestore persistence was never enabled.** The compat SDK is memory-only by
+   default, so an offline `set()` was attempted once, failed, and died with the
+   page. Now `enablePersistence({synchronizeTabs:true})` runs in
+   `waitForFirebase()` — writes queue in IndexedDB and flush on reconnect,
+   surviving refresh and shutdown. It must stay before any other Firestore call.
+2. **`applyCloudData()` treated "different" as "the cloud is right".** It compared
+   values, never times. The first snapshot after reconnect carried the pre-outage
+   document and overwrote `state` — *and* `localStorage`, in the same pass, which
+   is what made it unrecoverable rather than merely annoying. The `_updatedAt`
+   stamps were already being written on every save; nothing ever read them.
+3. **The 5-minute retry net was disarmed by the reload.** `loadLocalCache()` seeds
+   `lastPersisted` from localStorage, so after a refresh `autoSaveAll()`'s
+   value-comparison concluded everything was already safe.
+
+The invariants now, all three load-bearing:
+
+- **`<key>__at`** in localStorage — when this device last wrote that key.
+- **`__unsynced`** in localStorage — keys whose write never reached the cloud.
+- A cloud value wins **only** if the key isn't flagged unsynced *and* the cloud
+  stamp is not older than ours. Otherwise the local copy is kept and
+  `pushLocalOverCloud()` sends it up instead.
+
+Both records live in localStorage on purpose: the decision that matters is made
+on the visit *after* the network returned, so anything held in memory is already
+gone by then. If you add a new storage key, it inherits this automatically via
+`storageSet`/`saveMany` — but a write path that bypasses those gets none of it.
+
+`applyCloudData()` also stashes the value it replaces in `<key>__prev` before
+overwriting. It is never read by the app; it exists so a wrong judgement is
+recoverable by hand instead of final.
+
+The status label now shouts about unsynced work rather than saying "Live sync",
+and a `window.online` listener flushes immediately instead of waiting out the
+5-minute timer. Regression-tested: offline-then-reconnect keeps the local copy in
+both state and localStorage and pushes it up; a genuinely newer cloud copy still
+wins; a fresh device still accepts the cloud; a stampless (pre-fix) cloud
+document cannot beat a stamped local one.
+
 ## How the money actually splits
 
 Three purses, all the same shape (`*OpeningFor` / `*InflowFor` / `*SpentFor`, an

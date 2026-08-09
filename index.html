@@ -285,6 +285,9 @@
     font-variant-numeric:tabular-nums;color:var(--clay);
     border-bottom:1.5px dotted var(--clay);
   }
+  /* As a KPI headline the figure is 22px, not a 13px table cell — inherit the size it
+     sits in so it still reads as the big number, keeping only the dotted "tappable" edge. */
+  .lg-kpi .num .owed-pay{font-size:inherit;font-weight:inherit;padding:0;}
   .owed-pay{transition:background-color 140ms ease, transform 120ms var(--ease-out);}
   .owed-pay:active{transform:scale(0.96);}
   .owed-pay:hover,.owed-pay:focus-visible{background:rgba(171,69,48,.1);border-bottom-style:solid;}
@@ -795,6 +798,17 @@
   clockEl.textContent = new Date().toLocaleDateString('en-NG',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
   function updateStorageModeLabel(){
     const el = document.getElementById('lg-storage-mode');
+    if(!el) return;
+    // Silence about unsynced work is what let a whole day quietly sit unsaved.
+    // If anything hasn't reached the cloud, that outranks every other status.
+    const stuck = (typeof readUnsynced === 'function') ? readUnsynced() : [];
+    if(stuck.length && currentUid){
+      el.textContent = '\u26a0 ' + stuck.length + ' change' + (stuck.length===1?'':'s') + ' not yet synced \u2014 saved on this device';
+      el.title = 'This device holds work the cloud does not have yet. It will sync itself when the network returns. Do not clear this browser, and take a Backup if you can.';
+      el.style.color = '#B9791C';
+      return;
+    }
+    el.style.color = '';
     if(window.__FIREBASE_READY__ && currentUid){
       const user = window.__firebaseAuth__ && window.__firebaseAuth__.currentUser;
       el.textContent = '\u2601 Live sync \u2014 ' + ((user && user.email) || 'signed in');
@@ -834,7 +848,42 @@
   // safety-net save skip fields that haven't changed instead of rewriting the
   // whole ledger to the network every 5 minutes.
   const lastPersisted = Object.create(null);
-  const STORAGE_KEYS = [['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
+
+  // ---------- which copy is newer, and what hasn't synced yet ----------
+  //
+  // On 7 Aug 2026 a day of offline entry was destroyed by the first snapshot
+  // after the network returned: the cloud handed back its pre-outage document,
+  // and applyCloudData() overwrote both state AND localStorage with it because
+  // it treated "different" as "the cloud is right". The `_updatedAt` stamps were
+  // already being written on every save — they were simply never read.
+  //
+  // These two records fix that, and both live in localStorage on purpose: the
+  // decision that matters is made on the visit AFTER the network came back, so
+  // anything held only in memory is useless by then.
+  //   <key>__at        when this device last wrote that key
+  //   __unsynced       keys whose last write never reached the cloud
+  function localStampKey(key){ return LS_PREFIX + key + '__at'; }
+  function markLocalWrite(key, when){
+    try{ localStorage.setItem(localStampKey(key), when || new Date().toISOString()); }catch(e){}
+  }
+  function localWriteTime(key){
+    try{ return localStorage.getItem(localStampKey(key)); }catch(e){ return null; }
+  }
+  const UNSYNCED_KEY = '__unsynced';
+  function readUnsynced(){
+    try{ return JSON.parse(localStorage.getItem(LS_PREFIX+UNSYNCED_KEY) || '[]'); }catch(e){ return []; }
+  }
+  function writeUnsynced(list){
+    try{ localStorage.setItem(LS_PREFIX+UNSYNCED_KEY, JSON.stringify(Array.from(new Set(list)))); }catch(e){}
+  }
+  function markUnsynced(keys){ writeUnsynced(readUnsynced().concat(keys)); updateStorageModeLabel(); }
+  function clearUnsynced(keys){
+    const drop = new Set(keys);
+    writeUnsynced(readUnsynced().filter(k=>!drop.has(k)));
+    updateStorageModeLabel();
+  }
+
+  const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
   const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
@@ -867,6 +916,24 @@
           try{
             window.__firebaseApp__ = firebase.initializeApp(window.__FIREBASE_CONFIG__);
             window.__firestoreDb__ = firebase.firestore();
+            // Offline persistence. Without this, Firestore keeps its cache in memory
+            // only: a write made with no signal is attempted once, fails, and is
+            // gone the moment the page reloads. With it, the write is queued in
+            // IndexedDB and flushed automatically when the network returns — it
+            // survives a refresh, a crash, and the machine being turned off.
+            //
+            // This must be called before any other Firestore use, which is why it
+            // sits here. It legitimately fails in two cases — several tabs open
+            // without synchronizeTabs, and browsers with no IndexedDB — and neither
+            // is fatal, so it is deliberately not awaited.
+            try{
+              window.__firestoreDb__.enablePersistence({synchronizeTabs:true})
+                .then(()=>{ window.__LG_PERSIST__ = true; })
+                .catch((err)=>{
+                  window.__LG_PERSIST__ = false;
+                  console.warn('Offline persistence unavailable:', err && err.code);
+                });
+            }catch(e){ window.__LG_PERSIST__ = false; }
             window.__firebaseAuth__ = firebase.auth();
             window.__FIREBASE_READY__ = true;
           }catch(e){
@@ -894,15 +961,22 @@
   }
   async function storageSet(key, value){
     // Always mirror to localStorage first — cheap, and guarantees nothing is lost even if the
-    // network call below fails.
+    // network call below fails. The stamp goes down with it, so a later reconnect
+    // can tell this copy is newer than whatever the cloud still thinks is current.
+    const at = new Date().toISOString();
     try{ localStorage.setItem(LS_PREFIX+key, value); }catch(e){}
+    markLocalWrite(key, at);
     if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
       try{
-        await withTimeout(fsAllDoc().set({[key]: value, [key+'_updatedAt']: new Date().toISOString()}, {merge:true}), 8000, 'Cloud save');
+        await withTimeout(fsAllDoc().set({[key]: value, [key+'_updatedAt']: at}, {merge:true}), 8000, 'Cloud save');
+        clearUnsynced([key]);
         return {key, value, shared:false};
       }catch(e){
         console.error('Firestore save failed, kept in local cache:', e);
-        toast('Cloud save failed — kept locally, will retry next save');
+        // Remembered across reloads. Until this clears, no cloud snapshot is
+        // allowed to overwrite this key.
+        markUnsynced([key]);
+        toast('No connection — saved on this device, will sync when the network is back');
         return {key, value, shared:false};
       }
     }
@@ -947,21 +1021,75 @@
   // actually differed from what's already on screen.
   function applyCloudData(data){
     let changed = false;
+    const unsynced = new Set(readUnsynced());
+    const keepLocal = [];
     STORAGE_KEYS.forEach(([prop,key])=>{
       if(data[key] == null) return;
+
+      // THE CHECK THAT WAS MISSING. A cloud value only wins if it is at least as
+      // new as what this device holds. Two ways it can lose:
+      //   - this device has a write that never reached the cloud, so the cloud
+      //     literally cannot know about it;
+      //   - the cloud's stamp is older than ours, i.e. we are looking at a
+      //     document written before our last local edit.
+      // Either way the local copy is the good one. Keep it and push it up —
+      // never overwrite it, and above all never overwrite the localStorage copy,
+      // which is the last line of defence.
+      const localAt = localWriteTime(key);
+      const cloudAt = data[key+'_updatedAt'] || null;
+      if(unsynced.has(key) || (localAt && (!cloudAt || cloudAt < localAt))){
+        if(data[key] !== JSON.stringify(state[prop])) keepLocal.push([prop,key]);
+        return;
+      }
+
       try{
         const parsed = prop==='settings'
           ? Object.assign({}, DEFAULT_SETTINGS, JSON.parse(data[key]))
           : JSON.parse(data[key]);
         if(JSON.stringify(state[prop]) !== JSON.stringify(parsed)){
+          // Last-ditch recovery copy, kept on the device. If the judgement above
+          // is ever wrong, the replaced value is still here to be dug out rather
+          // than gone for good — which is exactly what wasn't true on 7 Aug.
+          try{
+            const before = localStorage.getItem(LS_PREFIX+key);
+            if(before != null && before !== data[key]) localStorage.setItem(LS_PREFIX+key+'__prev', before);
+          }catch(e){}
           state[prop] = parsed;
           changed = true;
         }
         lastPersisted[key] = data[key];
         try{ localStorage.setItem(LS_PREFIX+key, data[key]); }catch(e){}
+        if(cloudAt) markLocalWrite(key, cloudAt);
       }catch(e){ /* ignore malformed field, keep local value */ }
     });
+    if(keepLocal.length) pushLocalOverCloud(keepLocal);
     return changed;
+  }
+
+  // Re-sends the keys this device holds a newer copy of. This runs at exactly the
+  // moment the old code destroyed them: the first snapshot after a reconnect,
+  // carrying a document that predates the offline work.
+  let pushingLocal = false;
+  async function pushLocalOverCloud(entries){
+    if(pushingLocal || !entries.length) return;
+    pushingLocal = true;
+    const payload = {};
+    entries.forEach(([prop,key])=>{
+      payload[key] = JSON.stringify(state[prop]);
+      payload[key+'_updatedAt'] = localWriteTime(key) || new Date().toISOString();
+    });
+    try{
+      await withTimeout(fsAllDoc().set(payload, {merge:true}), 12000, 'Re-sync');
+      entries.forEach(([,key])=>{ lastPersisted[key] = payload[key]; });
+      clearUnsynced(entries.map(e=>e[1]));
+      markSaveStatus(true);
+      toast('Work saved while offline has now synced');
+    }catch(e){
+      console.error('Re-sync failed, local copy kept:', e);
+      markUnsynced(entries.map(e=>e[1]));
+    }finally{
+      pushingLocal = false;
+    }
   }
 
   // A remote change arriving mid-edit would wipe whatever is being typed, because every
@@ -1107,22 +1235,28 @@
   // wait on their own network trip, which is what made buttons like "Save Job" feel frozen.
   async function saveMany(props){
     const payload = {};
+    const at = new Date().toISOString();
     props.forEach(prop=>{
       const key = SAVE_KEY_MAP[prop];
       const value = JSON.stringify(state[prop]);
       try{ localStorage.setItem(LS_PREFIX+key, value); }catch(e){}
+      markLocalWrite(key, at);
       payload[key] = value;
-      payload[key+'_updatedAt'] = new Date().toISOString();
+      payload[key+'_updatedAt'] = at;
     });
     if(window.__FIREBASE_READY__ || await waitForFirebase(1500)){
       try{
         await withTimeout(fsAllDoc().set(payload, {merge:true}), 8000, 'Cloud save');
         props.forEach(prop=>{ lastPersisted[SAVE_KEY_MAP[prop]] = payload[SAVE_KEY_MAP[prop]]; });
+        clearUnsynced(props.map(p=>SAVE_KEY_MAP[p]));
         markSaveStatus(true);
         return true;
       }catch(e){
         console.error('Firestore save failed, kept in local cache:', e);
-        toast('Cloud save failed — kept locally, will retry next save');
+        // Survives a reload. Until it clears, the reconnect snapshot cannot
+        // overwrite these keys — this is the flag that was missing on 7 Aug.
+        markUnsynced(props.map(p=>SAVE_KEY_MAP[p]));
+        toast('No connection — saved on this device, will sync when the network is back');
         markSaveStatus(false);
         return false;
       }
@@ -1165,8 +1299,14 @@
   // Now: stringify once, skip fields already known to be persisted, and hand whatever is
   // left to saveMany() as ONE merge write. An idle ledger costs zero network traffic.
   async function autoSaveAll(force){
+    // Anything flagged as never having reached the cloud is always included.
+    // loadLocalCache() seeds lastPersisted straight from localStorage, so after a
+    // reload the value-comparison below thinks an unsynced key is already safe —
+    // which is precisely how the retry net was disarmed on the visit that
+    // mattered. The flag is the only thing that survives to say otherwise.
+    const stuck = new Set(readUnsynced());
     const dirty = Object.keys(SAVE_KEY_MAP).filter(prop=>{
-      if(force) return true;
+      if(force || stuck.has(SAVE_KEY_MAP[prop])) return true;
       try{ return lastPersisted[SAVE_KEY_MAP[prop]] !== JSON.stringify(state[prop]); }
       catch(e){ return false; }
     });
@@ -2241,6 +2381,7 @@
 
   // ---------- DAILY VIEW (full income & jobs for one day) ----------
   let dayViewDate = todayISO();
+  let dayDebtOpen = false;   // New Debt KPI expanded to show which jobs make up the figure
   function shiftDate(iso, delta){
     const d = new Date(iso+'T00:00:00'); d.setDate(d.getDate()+delta); return isoOf(d);
   }
@@ -2283,6 +2424,53 @@
     const netCash = paid - expenseTotal - matCost;
     return {jobsToday, billed, newDebt, cp, matCost, matCostUsed, matWasteCost, paid, jobIncome, oldDebtPaid, paymentsToday, expensesToday, expenseTotal, netProfit, tithe, pf, ex, netCash};
   }
+  // Where the day's New Debt figure came from, job by job. The debt is carried by the
+  // customer on each job rather than being a figure of its own, so this rebuilds the total
+  // the same way dayStats() does — same jobs, same jobTotals() — and shows the parts.
+  // Several jobs can belong to one customer, so they're grouped: the shop thinks in terms
+  // of who owes them, not which docket it came off.
+  function renderDayDebtBreakdown(d){
+    const owing = d.jobsToday
+      .map(j=>({job:j, t:jobTotals(j)}))
+      .filter(x=>x.t.debt > 0)
+      .sort((a,b)=>b.t.debt - a.t.debt);
+    if(!owing.length) return '';
+    const byCustomer = new Map();
+    owing.forEach(x=>{
+      const name = x.job.customerName || '—';
+      if(!byCustomer.has(name)) byCustomer.set(name, []);
+      byCustomer.get(name).push(x);
+    });
+    const groups = Array.from(byCustomer.entries())
+      .map(([name, rows])=>({name, rows, total: rows.reduce((s,r)=>s+r.t.debt,0)}))
+      .sort((a,b)=>b.total - a.total);
+    const total = owing.reduce((s,x)=>s+x.t.debt, 0);
+    return `<div class="lg-card" style="border-left:3px solid var(--clay);">
+      <div class="lg-card-title">Who the ${naira(total)} is owed by — ${fmtDate(dayViewDate)}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+        ${groups.length} customer${groups.length===1?'':'s'} across ${owing.length} job${owing.length===1?'':'s'} taken in on this day.
+        Tap an amount owed to record a payment against that job — the form opens in the job list below.
+      </div>
+      <div style="overflow-x:auto;"><table><thead><tr>
+        <th>Customer</th><th>Job</th><th>Phone</th>
+        <th class="num-col">Billed</th><th class="num-col">Paid</th><th class="num-col">Owed</th>
+      </tr></thead><tbody>
+      ${groups.map(g=>g.rows.map((x,i)=>`<tr>
+        <td>${i===0 ? `<b>${esc(g.name)}</b>${g.rows.length>1?` <span class="muted">(${g.rows.length})</span>`:''}` : ''}</td>
+        <td>${esc(x.job.description || (x.job.items && x.job.items[0] ? x.job.items[0].service : '—'))}</td>
+        <td class="muted">${i===0 ? (esc(x.job.phone)||'—') : ''}</td>
+        <td class="num-col">${naira(x.t.totalBilled)}</td>
+        <td class="num-col">${naira(x.t.totalPaid)}</td>
+        <td class="num-col"><button class="owed-pay job-payment-toggle" data-id="${x.job.id}" title="Record a payment against this job">${naira(x.t.debt)}</button></td>
+      </tr>`).join('')).join('')}
+      <tr style="font-weight:700;border-top:2px solid var(--ink);">
+        <td colspan="5">TOTAL NEW DEBT</td>
+        <td class="num-col flag">${naira(total)}</td>
+      </tr>
+      </tbody></table></div>
+    </div>`;
+  }
+
   function renderDayView(){
     const d = dayStats(dayViewDate);
     content.innerHTML = `
@@ -2303,12 +2491,18 @@
         <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(d.paid)}</div><div class="lbl">Grand Total</div></div>
       </div>
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi debt"><div class="num">${naira(d.newDebt)}</div><div class="lbl">New Debt</div></div>
+        <div class="lg-card lg-kpi debt">
+          <div class="num">${d.newDebt>0
+            ? `<button class="owed-pay dv-debt-toggle" title="See who this is owed by">${naira(d.newDebt)}</button>`
+            : naira(d.newDebt)}</div>
+          <div class="lbl">New Debt${d.newDebt>0?` · <span class="muted" style="text-transform:none;letter-spacing:0;">${dayDebtOpen?'hide':'who owes it'}</span>`:''}</div>
+        </div>
         <div class="lg-card"><div class="lg-card-title">Cost of Production</div><div style="font-size:18px;font-weight:600">${naira(d.cp)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-cp-account" data-date="${dayViewDate}" style="color:var(--teal);">CP Account \u2192</a></div></div>
         <div class="lg-card"><div class="lg-card-title">Material Cost — Bought Today</div><div style="font-size:18px;font-weight:600">${naira(d.matCost)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-purchase-log" style="color:var(--teal);">Purchase Log \u2192</a></div></div>
         <div class="lg-card"><div class="lg-card-title">Material Cost — Used Today</div><div style="font-size:18px;font-weight:600">${naira(d.matCostUsed)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">at today's material price</div></div>
         <div class="lg-card"><div class="lg-card-title">Material Cost — Wasted Today</div><div style="font-size:18px;font-weight:600;${d.matWasteCost>0?'color:var(--clay);':''}">${naira(d.matWasteCost)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">spoiled/wasted material</div></div>
       </div>
+      ${dayDebtOpen && d.newDebt>0 ? renderDayDebtBreakdown(d) : ''}
       <div class="lg-grid cols-4">
         <div class="lg-card"><div class="lg-card-title">Expenses</div><div style="font-size:18px;font-weight:600">${naira(d.expenseTotal)}</div></div>
         <div class="lg-card"><div class="lg-card-title">Net Profit</div><div style="font-size:18px;font-weight:600">${naira(d.netProfit)}</div></div>
@@ -2359,6 +2553,8 @@
     document.getElementById('dv-prev').addEventListener('click', ()=>{ dayViewDate = shiftDate(dayViewDate,-1); renderDayView(); });
     document.getElementById('dv-next').addEventListener('click', ()=>{ dayViewDate = shiftDate(dayViewDate,1); renderDayView(); });
     document.getElementById('dv-today').addEventListener('click', ()=>{ dayViewDate = todayISO(); renderDayView(); });
+    const debtToggle = document.querySelector('.dv-debt-toggle');
+    if(debtToggle) debtToggle.addEventListener('click', ()=>{ dayDebtOpen = !dayDebtOpen; renderDayView(); });
     attachStatusHandlers(renderDayView);
     attachDeleteHandlers(renderDayView);
     attachPaymentHandlers(renderDayView);
@@ -6461,6 +6657,20 @@
     }
     markSaveStatus(true);
     setInterval(()=>autoSaveAll(), 5*60*1000);
+    // Don't make anyone wait up to five minutes for the retry. The moment the
+    // browser says the network is back, flush whatever never made it up and
+    // re-attach the live listener, which the outage will have dropped.
+    window.addEventListener('online', async ()=>{
+      if(!currentUid) return;
+      updateStorageModeLabel();
+      try{ if(readUnsynced().length) await autoSaveAll(); }catch(e){}
+      try{ subscribeToCloud(); }catch(e){}
+      updateStorageModeLabel();
+    });
+    if(readUnsynced().length){
+      toast('You have work saved offline — syncing it now');
+      autoSaveAll();
+    }
     startAlarmWatch();
     // The shop-floor listeners run from here, not from opening the Team tab: a
     // staff member moving a job has to reach the books whichever tab is on screen.
