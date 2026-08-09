@@ -481,6 +481,42 @@
     .lg-receipt-actions{display:none;}
     .lg-overlay{position:static; background:none; padding:0;}
   }
+
+  /* ---------- Team tab (the owner's side of the staff chatbox) ---------- */
+  .tm-code{
+    font-family:var(--font-mono);font-size:13px;word-break:break-all;
+    background:var(--paper-deep);border:1px dashed var(--rule);border-radius:3px;
+    padding:8px 10px;line-height:1.5;
+  }
+  .tm-list{
+    max-height:380px;overflow-y:auto;border:1px solid var(--rule);border-radius:3px;
+    padding:10px 12px;background:#FFFDF8;display:flex;flex-direction:column;gap:2px;
+  }
+  .tm-day{text-align:center;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;
+    color:var(--muted);margin:12px 0 8px;}
+  .tm-msg{display:flex;margin-top:7px;}
+  .tm-msg.mine{justify-content:flex-end;}
+  .tm-msg.run{margin-top:2px;}
+  .tm-bub{max-width:min(78%,460px);border:1px solid var(--rule);border-radius:10px;
+    padding:7px 10px;background:var(--paper);}
+  .tm-msg.mine .tm-bub{background:var(--ok-deep);border-color:var(--ok-deep);color:#F3F2FF;}
+  .tm-bub .f{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--ok-blue);font-weight:700;margin-bottom:2px;}
+  .tm-bub .t{font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
+  .tm-bub .h{font-size:9.5px;color:var(--muted);text-align:right;margin-top:2px;}
+  .tm-msg.mine .tm-bub .h{color:rgba(243,242,255,0.7);}
+  .tm-bub img{display:block;max-width:100%;max-height:210px;border-radius:5px;margin-bottom:5px;
+    border:1px solid var(--rule);cursor:zoom-in;}
+  .tm-row{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:7px 0;border-bottom:1px dotted var(--rule);font-size:12.5px;flex-wrap:wrap;}
+  .tm-row:last-child{border-bottom:none;}
+  .tm-pulse{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;
+    margin-right:6px;animation:tmPulse 2.4s ease-in-out infinite;}
+  @keyframes tmPulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+  .tm-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+  .tm-thumbs .th{width:64px;}
+  .tm-thumbs .th img{width:64px;height:48px;object-fit:cover;border:1px solid var(--rule);border-radius:3px;display:block;}
+  .tm-thumbs .th .c{font-size:9px;color:var(--muted);word-break:break-all;line-height:1.2;margin-top:2px;}
+  .tm-off{font-size:12px;color:var(--clay);}
 </style>
 </head>
 <body>
@@ -545,6 +581,7 @@
     {id:'pending', label:'Pending Jobs'},
     {id:'quotes', label:'Quotes'},
     {id:'staff', label:'Staff'},
+    {id:'teamchat', label:'Team'},
     {id:'prices', label:'Price List'},
     {id:'matprices', label:'Material Prices'},
     {id:'customers', label:'Customers'},
@@ -2054,8 +2091,18 @@
   }
 
   // ---------- render shell ----------
+  // Deliberately a hoisted `var`, not a property of the `team` object defined much
+  // further down: renderTabs runs long before that `const` and reading a const in
+  // its dead zone throws — `typeof` doesn't save you from that either.
+  var teamUnread = 0;
   function renderTabs(){
-    tabsEl.innerHTML = TABS.map(t=>`<button class="lg-tab ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}</button>`).join('');
+    tabsEl.innerHTML = TABS.map(t=>{
+      // Unread staff messages are the one thing worth pulling the eye to a tab
+      // that isn't open — everything else on this page can wait until it's looked at.
+      const n = (t.id==='teamchat') ? teamUnread : 0;
+      const badge = n>0 ? ` <span style="background:var(--clay);color:#fff;border-radius:8px;padding:1px 5px;font-size:10px;font-family:var(--font-mono);">${n>99?'99+':n}</span>` : '';
+      return `<button class="lg-tab ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}${badge}</button>`;
+    }).join('');
     tabsEl.querySelectorAll('.lg-tab').forEach(b=>{
       b.addEventListener('click', ()=>{ state.tab = b.dataset.tab; renderAll(); });
     });
@@ -2092,6 +2139,7 @@
     else if(state.tab==='cpaccount') renderCPAccount();
     else if(state.tab==='quotes') renderQuotes();
     else if(state.tab==='staff') renderStaff();
+    else if(state.tab==='teamchat') renderTeam();
   }
 
   // ---------- DASHBOARD ----------
@@ -3400,6 +3448,7 @@
         ${t.debt>0 ? `<button class="subtle-link job-payment-toggle" data-id="${j.id}">record payment</button>` : ''}
         <button class="subtle-link job-waste-toggle" data-id="${j.id}">record waste</button>
         <button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button>
+        <button class="subtle-link job-send-staff" data-id="${j.id}">${j.staffTaskId?'on the floor':'send to staff'}</button>
         ${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener">notify</a>`:''}
         ${(job=>job.payments&&job.payments.length)(j) ? `<button class="subtle-link job-receipt" data-id="${j.id}">receipt</button>` : ''}
         <button class="subtle-link job-delete" data-id="${j.id}">remove</button>
@@ -3492,7 +3541,7 @@
             ? `<button class="owed-pay job-payment-toggle" data-id="${j.id}" title="Record a payment against this job">${naira(t.debt)}</button>`
             : (t.debt>0 ? naira(t.debt) : (t.credit>0?naira(-t.credit):naira(0)))
         }</td>
-        ${withActions?`<td class="lg-row-actions"><button class="subtle-link job-guide-toggle" data-id="${j.id}">what to do</button>${t.debt>0?`<button class="subtle-link job-payment-toggle" data-id="${j.id}">pay</button>`:''}<button class="subtle-link job-waste-toggle" data-id="${j.id}">waste</button><button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button>${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener" title="Send this customer a status update on WhatsApp">notify</a>`:''}${(j.payments&&j.payments.length)?`<button class="subtle-link job-receipt" data-id="${j.id}">receipt</button>`:''}<button class="subtle-link job-delete" data-id="${j.id}">remove</button></td>`:''}
+        ${withActions?`<td class="lg-row-actions"><button class="subtle-link job-guide-toggle" data-id="${j.id}">what to do</button>${t.debt>0?`<button class="subtle-link job-payment-toggle" data-id="${j.id}">pay</button>`:''}<button class="subtle-link job-waste-toggle" data-id="${j.id}">waste</button><button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button><button class="subtle-link job-send-staff" data-id="${j.id}">${j.staffTaskId?'on the floor':'send to staff'}</button>${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener" title="Send this customer a status update on WhatsApp">notify</a>`:''}${(j.payments&&j.payments.length)?`<button class="subtle-link job-receipt" data-id="${j.id}">receipt</button>`:''}<button class="subtle-link job-delete" data-id="${j.id}">remove</button></td>`:''}
       </tr>
       ${withActions && openGuideId===j.id ? `<tr><td colspan="9" style="padding-top:0;">${renderGuideBlock(j)}</td></tr>` : ''}
       ${withActions && openPaymentId===j.id ? `<tr><td colspan="9" style="padding-top:0;">${renderPaymentForm(j)}</td></tr>` : ''}
@@ -5464,6 +5513,763 @@
     });
   }
 
+  // ---------- TEAM — the owner's side of the staff chatbox ----------
+  //
+  // Everything here lives in a DIFFERENT Firestore collection to the ledger:
+  //     shops/{ownerUid}/…   members, joinRequests, messages, tasks, shifts
+  // The staff app (staff.html) reads that tree and has no rule granting it any
+  // access to ledgerData. That separation is the whole security model — see
+  // firestore.rules. Nothing in this module ever hands a figure to a staff
+  // account; a job pushed to the floor carries the spec and the artwork, never
+  // the price, the payments or the debt.
+  const team = {
+    started:false, shop:null,
+    members:[], requests:[], messages:[], tasks:[], shifts:[],
+    unsub:[], pendingFile:null, uploading:false,
+    firstMsgPaint:true
+  };
+
+  function teamShopRef(){
+    if(!currentUid) throw new Error('Not signed in');
+    return window.__firestoreDb__.collection('shops').doc(currentUid);
+  }
+  function teamReady(){ return !!(window.__FIREBASE_READY__ && currentUid && window.__firestoreDb__); }
+
+  function tsDate(ts){
+    if(!ts) return null;
+    if(typeof ts.toDate === 'function') return ts.toDate();
+    if(typeof ts === 'string' || typeof ts === 'number') return new Date(ts);
+    return null;
+  }
+  function hhmm(d){ return d ? String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') : '--:--'; }
+  function fmtHM(ms){
+    if(!(ms>0)) return '0h 00m';
+    const mins = Math.floor(ms/60000);
+    return Math.floor(mins/60)+'h '+String(mins%60).padStart(2,'0')+'m';
+  }
+  function teamWeekStart(){
+    const d = new Date();
+    d.setDate(d.getDate() - ((d.getDay()+6)%7));   // Monday
+    return isoOf(d);
+  }
+
+  // Subscriptions run from sign-in, not from opening the tab, because two of them
+  // are load-bearing even when the tab is closed: staff moving a job has to reach
+  // the ledger, and the Team tab needs an unread count to be worth showing.
+  async function startTeam(){
+    if(team.started || !teamReady()) return;
+    team.started = true;
+    try{
+      const snap = await withTimeout(teamShopRef().get(), 8000, 'Shop lookup');
+      team.shop = snap.exists ? snap.data() : null;
+    }catch(e){ team.shop = null; }
+
+    const on = (ref, fn) => { try{ team.unsub.push(ref.onSnapshot(fn, err=>console.warn('team listener', err))); }catch(e){} };
+
+    on(teamShopRef(), s=>{
+      team.shop = s.exists ? s.data() : null;
+      if(state.tab==='teamchat') renderTeam();
+    });
+    on(teamShopRef().collection('members'), s=>{
+      team.members = s.docs.map(d=>Object.assign({id:d.id}, d.data()));
+      if(state.tab==='teamchat') renderTeam();
+    });
+    on(teamShopRef().collection('joinRequests'), s=>{
+      team.requests = s.docs.map(d=>Object.assign({id:d.id}, d.data()));
+      if(state.tab==='teamchat') renderTeam();
+    });
+    on(teamShopRef().collection('messages').orderBy('at','asc').limitToLast(200), s=>{
+      team.messages = s.docs.map(d=>Object.assign({id:d.id}, d.data()));
+      if(!team.firstMsgPaint){
+        s.docChanges().forEach(ch=>{
+          if(ch.type!=='added') return;
+          if(ch.doc.data().from === currentUid) return;
+          if(ch.doc.metadata.hasPendingWrites) return;
+          if(state.tab !== 'teamchat') teamUnread++;
+        });
+      }
+      team.firstMsgPaint = false;
+      // Only the message list is replaced, never the whole tab — rebuilding the
+      // tab would destroy whatever the owner is halfway through typing.
+      if(state.tab==='teamchat') renderTeamMessages();
+      else renderTabs();
+    });
+    on(teamShopRef().collection('tasks').orderBy('createdAt','desc').limit(150), s=>{
+      team.tasks = s.docs.map(d=>Object.assign({id:d.id}, d.data()));
+      applyStaffJobUpdates();
+      if(state.tab==='teamchat') renderTeam();
+    });
+    on(teamShopRef().collection('shifts').where('date','>=', teamWeekStart()), s=>{
+      team.shifts = s.docs.map(d=>Object.assign({id:d.id}, d.data()));
+      if(state.tab==='teamchat') renderTeam();
+    });
+  }
+
+  function stopTeam(){
+    while(team.unsub.length){ try{ team.unsub.pop()(); }catch(e){} }
+    team.started = false; team.shop = null;
+    team.members = []; team.requests = []; team.messages = []; team.tasks = []; team.shifts = [];
+    teamUnread = 0; team.firstMsgPaint = true;
+  }
+
+  // ---------- staff job updates flowing back into the books ----------
+  //
+  // A staff member can only write `staffUpdate` on a task (firestore.rules pins
+  // the key set). It carries a monotonic `rev`; the job remembers the last rev it
+  // applied, so replaying the same snapshot can't double-apply and the ledger
+  // never writes anything the staff app would read back. One direction only.
+  function applyStaffJobUpdates(){
+    if(!state.loaded) return;
+    let changed = false;
+    const touched = [];
+    team.tasks.forEach(t=>{
+      const su = t.staffUpdate;
+      if(!t.jobId || !su || !su.stage) return;
+      const j = state.jobs.find(x=>x.id===t.jobId);
+      if(!j) return;
+      const rev = Number(su.rev)||0;
+      if((Number(j.staffRev)||0) >= rev) return;
+      j.staffRev = rev;
+      if(su.byName) j.operator = j.operator || su.byName;
+      // ACCEPTED just claims the job; only the two production stages are real
+      // ledger statuses. DELIVERED is never set from the floor — it's tied to
+      // collecting the balance, which is the owner's call.
+      if(su.stage==='IN PRODUCTION' || su.stage==='READY'){
+        if(j.status !== su.stage){
+          j.status = su.stage;
+          j.history = j.history || [];
+          j.history.push({status: su.stage, date: todayISO(), at: su.at || nowISO()});
+        }
+      }
+      changed = true;
+      touched.push(`${j.customerName} → ${su.stage==='ACCEPTED' ? 'taken by '+(su.byName||'staff') : su.stage}`);
+    });
+    if(!changed) return;
+    save('jobs');
+    toast(touched.length===1 ? touched[0] : touched.length+' jobs updated by staff');
+    // Repainting while a figure is being typed would throw the entry away. The
+    // state is already correct either way; the next natural render will show it.
+    const a = document.activeElement;
+    const typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+    if(!typing) renderAll();
+  }
+
+  // ---------- pushing a job to the shop floor ----------
+  function jobSpecText(j){
+    const lines = [];
+    (j.items||[]).forEach(it=>{
+      const bits = [it.service];
+      if(Number(it.qty)) bits.push('×'+it.qty+(it.unit?' '+it.unit:''));
+      if(it.desc) bits.push('— '+it.desc);
+      lines.push(bits.filter(Boolean).join(' '));
+    });
+    const mats = jobMaterialsList(j);
+    if(mats.length) lines.push('Material: '+mats.map(m=>`${m.name} ×${m.qty}`).join(', '));
+    if(j.description) lines.unshift(j.description);
+    return lines.join('\n');
+  }
+
+  // ---------- attachments, shrunk to fit inside the Firestore document ----------
+  //
+  // There is no file storage behind the staff chatbox, on purpose: it costs
+  // nothing and needs no console setup. The picture travels inside the message or
+  // the job card itself, as a data URI.
+  //
+  // That buys a hard ceiling. A Firestore document is capped at 1 MiB, and base64
+  // inflates a file by a third, so one attachment is budgeted at 400KB of base64
+  // (~a 300KB JPEG) and a whole job card at 700KB across all of its pictures.
+  // These are PREVIEWS — good enough to show the floor what the job is, and
+  // emphatically not print files. The real artwork still reaches the operator the
+  // way it always has.
+  const ATTACH_BUDGET = 400 * 1024;
+  const TASK_BUDGET   = 700 * 1024;
+
+  function readAsDataURL(file){
+    return new Promise((resolve, reject)=>{
+      const r = new FileReader();
+      r.onload  = ()=> resolve(r.result);
+      r.onerror = ()=> reject(new Error('Could not read that file'));
+      r.readAsDataURL(file);
+    });
+  }
+  function loadImageEl(src){
+    return new Promise((resolve, reject)=>{
+      const img = new Image();
+      img.onload  = ()=> resolve(img);
+      img.onerror = ()=> reject(new Error('Not a readable image'));
+      img.src = src;
+    });
+  }
+  // Two levers, in this order: scale down, then walk the JPEG quality down.
+  // Quality alone can't rescue a 6000px phone photo, and scaling alone throws
+  // away detail a lower quality would have kept.
+  async function shrinkImage(file){
+    const img = await loadImageEl(await readAsDataURL(file));
+    let dim = 1200;
+    for(let pass=0; pass<4; pass++){
+      const scale = Math.min(1, dim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      // JPEG has no alpha. Without this fill, a transparent PNG — which is how
+      // most logos arrive — comes out on a black background.
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      for(let q=0.82; q>=0.4; q-=0.12){
+        const out = c.toDataURL('image/jpeg', q);
+        if(out.length <= ATTACH_BUDGET) return {url:out, w, h};
+      }
+      dim = Math.round(dim * 0.7);
+    }
+    const e = new Error('too big'); e.code = 'too-big'; throw e;
+  }
+  async function makeAttachment(file){
+    if((file.type||'').indexOf('image/') === 0){
+      const r = await shrinkImage(file);
+      return {url:r.url, name:file.name, size:file.size, type:'image/jpeg',
+              w:r.w, h:r.h, preview:true, originalType:file.type||''};
+    }
+    const data = await readAsDataURL(file);
+    if(data.length > ATTACH_BUDGET){ const e = new Error('too big'); e.code = 'too-big'; throw e; }
+    return {url:data, name:file.name, size:file.size,
+            type:file.type||'application/octet-stream', preview:false};
+  }
+
+  async function pushJobToStaff(job, note, files, onProgress){
+    const attachments = [];
+    let used = 0;
+    for(let i=0; i<files.length; i++){
+      onProgress && onProgress('Preparing picture '+(i+1)+' of '+files.length+'…');
+      const a = await makeAttachment(files[i]);
+      used += a.url.length;
+      // The whole job card has to fit in one Firestore document. Better to refuse
+      // the third picture up front than to build the card and have the write bounce.
+      if(used > TASK_BUDGET){
+        const e = new Error('card too big'); e.code = 'card-too-big'; throw e;
+      }
+      attachments.push(a);
+    }
+    const title = (job.description || (job.items && job.items[0] ? job.items[0].service : '') || 'Job').slice(0,90);
+    const doc = {
+      jobId: job.id,
+      title,
+      customerName: job.customerName || '',
+      // Deliberately no price, no payments, no debt — the shop floor gets the
+      // work and the artwork, never the money.
+      spec: [jobSpecText(job), note && note.trim() ? 'Note: '+note.trim() : ''].filter(Boolean).join('\n'),
+      dueDate: job.dueDate || '',
+      stage: 'SENT',
+      attachments,
+      acceptedBy: null, acceptedByName: '',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy: currentUid
+    };
+    const ref = await teamShopRef().collection('tasks').add(doc);
+    job.staffTaskId = ref.id;
+    job.staffRev = 0;
+    await save('jobs');
+    return ref.id;
+  }
+
+  // ---------- the Team tab ----------
+  function renderTeam(){
+    if(!teamReady()){
+      content.innerHTML = `<div class="lg-card"><div class="lg-card-title">Team</div>
+        <div class="lg-empty">The staff chatbox needs a live connection. It'll appear once you're back online.</div></div>`;
+      return;
+    }
+    teamUnread = 0;
+
+    if(!team.shop){
+      content.innerHTML = `
+        <div class="lg-card">
+          <div class="lg-card-title">Team — the staff chatbox</div>
+          <div style="font-size:13px;line-height:1.65;">
+            Open a shop floor and your staff get their own app at <b>staff.html</b> — a chat,
+            the jobs you send them, the print files, and a clock to sign in and out on.
+            <br><br>
+            They never see money. Prices, payments, debts and profit stay in this ledger and
+            there is no rule that lets a staff account read a single figure of it.
+          </div>
+          <button class="lg-btn" id="tm-create" type="button" style="margin-top:14px;">Open the shop floor</button>
+        </div>`;
+      document.getElementById('tm-create').addEventListener('click', async (e)=>{
+        await withButtonGuard(e.currentTarget, 'Opening…', async ()=>{
+          try{
+            await teamShopRef().set({
+              name: (state.settings.shopName && state.settings.shopName !== 'YOUR BUSINESS NAME')
+                      ? state.settings.shopName : 'Oktopus Prints',
+              ownerUid: currentUid,
+              ownerName: (window.__firebaseAuth__ && window.__firebaseAuth__.currentUser
+                          && window.__firebaseAuth__.currentUser.email) || 'Owner',
+              createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, {merge:true});
+            toast('Shop floor opened');
+          }catch(err){
+            console.error(err);
+            toast('Could not open it — have you published the new firestore.rules?');
+          }
+        });
+      });
+      return;
+    }
+
+    const staffUrl = location.href.replace(/[^/]*$/, '') + 'staff.html';
+    const today = todayISO();
+    const onNow = team.shifts.filter(s=>s.date===today && s.inAt && !s.outAt);
+    const active = team.members.filter(m=>m.active !== false);
+    const openTasks = team.tasks.filter(t=>(t.stage||'SENT')!=='READY');
+
+    content.innerHTML = `
+      <div class="lg-grid cols-4">
+        <div class="lg-card lg-kpi teal"><div class="num">${active.length}</div><div class="lbl">On the team</div></div>
+        <div class="lg-card lg-kpi paid"><div class="num">${onNow.length}</div><div class="lbl">Clocked in now</div></div>
+        <div class="lg-card lg-kpi"><div class="num">${openTasks.length}</div><div class="lbl">Jobs on the floor</div></div>
+        <div class="lg-card lg-kpi ${team.requests.length?'debt':''}"><div class="num">${team.requests.length}</div><div class="lbl">Waiting to join</div></div>
+      </div>
+
+      ${team.requests.length ? `
+      <div class="lg-card" style="border-left:3px solid var(--clay);">
+        <div class="lg-card-title">Waiting to join</div>
+        ${team.requests.map(r=>`<div class="tm-row">
+          <span><b>${esc(r.name||'Unnamed')}</b> <span class="muted">${esc(r.email||'')}</span></span>
+          <span class="lg-row-actions">
+            <button class="lg-btn small tm-approve" data-uid="${esc(r.id)}" type="button">Approve</button>
+            <button class="lg-btn ghost small tm-deny" data-uid="${esc(r.id)}" type="button">Decline</button>
+          </span>
+        </div>`).join('')}
+      </div>` : ''}
+
+      <div class="lg-card">
+        <div class="lg-card-title">Chat with the shop floor</div>
+        <div class="tm-list" id="tm-list"></div>
+        <div id="tm-attach" style="margin-top:8px;"></div>
+        <div style="display:flex;gap:6px;align-items:flex-end;margin-top:8px;">
+          <button class="lg-btn ghost small" id="tm-clip" type="button" title="Attach artwork or a print file" style="padding:8px 11px;">📎</button>
+          <textarea id="tm-input" rows="1" placeholder="Message the shop floor…" style="resize:none;min-height:38px;max-height:120px;"></textarea>
+          <button class="lg-btn small" id="tm-send" type="button" style="padding:9px 14px;">Send</button>
+        </div>
+        <input type="file" id="tm-file" style="display:none" accept="image/*,application/pdf">
+        <div class="muted" style="font-size:11px;margin-top:8px;">Pictures are shrunk to a preview before sending, so they cost nothing to store. Send the print file itself the usual way.</div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">The clock — this week</div>
+        ${!team.shifts.length ? '<div class="lg-empty">Nobody has clocked in this week.</div>' : (()=>{
+          const byPerson = new Map();
+          team.shifts.forEach(s=>{
+            if(!byPerson.has(s.uid)) byPerson.set(s.uid, {name:s.name||'Staff', ms:0, days:0, on:false, since:null});
+            const e = byPerson.get(s.uid);
+            const a = tsDate(s.inAt), b = tsDate(s.outAt);
+            if(!a) return;
+            const end = b ? b.getTime() : (s.date===today ? Date.now() : a.getTime());
+            e.ms += end - a.getTime(); e.days++;
+            if(s.date===today && !b){ e.on = true; e.since = a; }
+          });
+          return Array.from(byPerson.values()).sort((x,y)=>y.ms-x.ms).map(p=>`<div class="tm-row">
+            <span>${p.on?'<span class="tm-pulse"></span>':''}<b>${esc(p.name)}</b>
+              <span class="muted">${p.days} day${p.days===1?'':'s'}${p.on?' · on since '+esc(hhmm(p.since)):''}</span></span>
+            <span style="font-weight:700;">${esc(fmtHM(p.ms))}</span>
+          </div>`).join('');
+        })()}
+        <div style="margin-top:8px;"><button class="lg-btn ghost small" id="tm-clock-csv" type="button">⬇ Export this week</button></div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Jobs on the floor</div>
+        ${!team.tasks.length ? `<div class="lg-empty">Nothing sent yet. Open <b>Jobs</b> and press <b>send to staff</b> on a job.</div>` :
+          team.tasks.slice(0,40).map(t=>{
+            const stage = t.stage||'SENT';
+            return `<div class="tm-row">
+              <span><b>${esc(t.title||'Job')}</b>
+                <span class="muted">${t.customerName?esc(t.customerName):''}${t.acceptedByName?' · '+esc(t.acceptedByName):''}${(t.attachments&&t.attachments.length)?' · 📎'+t.attachments.length:''}</span></span>
+              <span class="lg-row-actions">
+                <span class="stamp ${stage==='READY'?'ready':(stage==='IN PRODUCTION'?'production':(stage==='ACCEPTED'?'delivered':'received'))}">${esc(stage)}</span>
+                <button class="subtle-link tm-untask" data-id="${esc(t.id)}">pull back</button>
+              </span>
+            </div>`;
+          }).join('')}
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">The team</div>
+        ${!team.members.length ? '<div class="lg-empty">Nobody has joined yet.</div>' :
+          team.members.map(m=>`<div class="tm-row">
+            <span><b>${esc(m.name||'Staff')}</b> <span class="muted">${esc(m.email||'')}${m.active===false?' — access off':''}</span></span>
+            <span class="lg-row-actions">
+              <button class="subtle-link tm-toggle" data-uid="${esc(m.id)}">${m.active===false?'turn access back on':'turn access off'}</button>
+              <button class="subtle-link tm-remove" data-uid="${esc(m.id)}">remove</button>
+            </span>
+          </div>`).join('')}
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Getting someone onto the floor</div>
+        <div style="font-size:12.5px;line-height:1.7;">
+          <b>1.</b> Create them an account in the Firebase console — <i>Authentication → Users → Add user</i>.
+          There is no sign-up form, so nobody can let themselves in.<br>
+          <b>2.</b> Send them the staff app link and the shop code below.<br>
+          <b>3.</b> They sign in, paste the code, and appear above under <b>Waiting to join</b>. Approve them and they're in.
+        </div>
+        <label>Staff app link</label>
+        <div class="tm-code" id="tm-url">${esc(staffUrl)}</div>
+        <label>Shop code</label>
+        <div class="tm-code" id="tm-shopcode">${esc(currentUid)}</div>
+        <div class="lg-row-actions" style="margin-top:10px;">
+          <button class="lg-btn ghost small" id="tm-copy-url" type="button">Copy link</button>
+          <button class="lg-btn ghost small" id="tm-copy-code" type="button">Copy shop code</button>
+          <a class="lg-btn ghost small" href="staff.html" target="_blank" rel="noopener" style="text-decoration:none;">Open staff app</a>
+        </div>
+      </div>`;
+
+    renderTeamMessages();
+    bindTeamHandlers();
+  }
+
+  function renderTeamMessages(){
+    const box = document.getElementById('tm-list');
+    if(!box) return;
+    if(!team.messages.length){
+      box.innerHTML = '<div class="lg-empty">No messages yet.</div>';
+      return;
+    }
+    let html = '', lastDay = '', lastFrom = '';
+    team.messages.forEach(m=>{
+      const d = tsDate(m.at) || new Date();
+      const day = isoOf(d);
+      if(day !== lastDay){
+        html += `<div class="tm-day">${esc(fmtDate(day))}</div>`;
+        lastDay = day; lastFrom = '';
+      }
+      const mine = m.from === currentUid;
+      const run = m.from === lastFrom;
+      lastFrom = m.from;
+      const a = m.attachment;
+      let body = '';
+      if(a && a.url){
+        if(a.type && a.type.indexOf('image/')===0){
+          body += `<img src="${esc(a.url)}" alt="${esc(a.name||'')}" loading="lazy" data-full="${esc(a.url)}" data-nm="${esc(a.name||'')}">`;
+        }
+        body += `<div style="margin-bottom:${m.text?'5px':'0'}"><a href="${esc(a.url)}"
+                  download="${esc(a.name||'')}" style="font-size:11px;font-weight:700;color:${mine?'#CFE0FF':'var(--ok-blue)'};">⤓ ${esc(a.name||'file')}</a></div>`;
+      }
+      if(m.text) body += `<div class="t">${esc(m.text)}</div>`;
+      html += `<div class="tm-msg ${mine?'mine':''} ${run?'run':''}"><div class="tm-bub">
+        ${(!mine && !run) ? `<div class="f">${esc(m.fromName||'Staff')}</div>` : ''}
+        ${body}<div class="h">${m.at ? esc(hhmm(d)) : 'sending…'}</div>
+      </div></div>`;
+    });
+    box.innerHTML = html;
+    box.scrollTop = box.scrollHeight;
+    // window.open() on a data: URI is blocked by the browser, so a picture opens
+    // in an overlay here rather than a new tab.
+    box.querySelectorAll('img[data-full]').forEach(img=>{
+      img.addEventListener('click', ()=> openImageOverlay(img.dataset.full, img.dataset.nm||''));
+    });
+  }
+
+  function bindTeamHandlers(){
+    const $t = id => document.getElementById(id);
+
+    document.querySelectorAll('.tm-approve').forEach(b=>{
+      b.addEventListener('click', async (e)=>{
+        const uid = b.dataset.uid;
+        const req = team.requests.find(r=>r.id===uid);
+        await withButtonGuard(e.currentTarget, 'Approving…', async ()=>{
+          try{
+            await teamShopRef().collection('members').doc(uid).set({
+              uid, name:(req&&req.name)||'Staff', email:(req&&req.email)||'',
+              role:'staff', active:true,
+              joinedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            // This is the document the staff app reads to find its shop. Writing
+            // it is what flips their screen from "waiting" into the app.
+            await window.__firestoreDb__.collection('staffIndex').doc(uid).set({
+              shopId: currentUid, name:(req&&req.name)||'Staff'
+            });
+            await teamShopRef().collection('joinRequests').doc(uid).delete();
+            toast(((req&&req.name)||'They')+' can now get in');
+          }catch(err){ console.error(err); toast('Could not approve — check the rules are published'); }
+        });
+      });
+    });
+
+    document.querySelectorAll('.tm-deny').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        try{ await teamShopRef().collection('joinRequests').doc(b.dataset.uid).delete(); toast('Request declined'); }
+        catch(err){ toast('Could not decline'); }
+      });
+    });
+
+    document.querySelectorAll('.tm-toggle').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const m = team.members.find(x=>x.id===b.dataset.uid);
+        if(!m) return;
+        try{
+          await teamShopRef().collection('members').doc(m.id).update({active: m.active===false});
+          toast(m.active===false ? 'Access restored' : 'Access turned off');
+        }catch(err){ toast('Could not change that'); }
+      });
+    });
+
+    document.querySelectorAll('.tm-remove').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const m = team.members.find(x=>x.id===b.dataset.uid);
+        if(!m) return;
+        if(!confirm('Remove '+(m.name||'this person')+' from the shop floor?\n\nTheir messages and clock records stay. They lose access immediately.')) return;
+        try{
+          await teamShopRef().collection('members').doc(m.id).delete();
+          await window.__firestoreDb__.collection('staffIndex').doc(m.id).delete();
+          toast('Removed');
+        }catch(err){ console.error(err); toast('Could not remove'); }
+      });
+    });
+
+    document.querySelectorAll('.tm-untask').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        if(!confirm('Pull this job back off the floor?\n\nStaff stop seeing it. The job itself stays in your ledger.')) return;
+        try{ await teamShopRef().collection('tasks').doc(b.dataset.id).delete(); toast('Pulled back'); }
+        catch(err){ toast('Could not pull it back'); }
+      });
+    });
+
+    if($t('tm-copy-url')) $t('tm-copy-url').addEventListener('click', ()=>{
+      copyText(document.getElementById('tm-url').textContent, 'Staff app link copied');
+    });
+    if($t('tm-copy-code')) $t('tm-copy-code').addEventListener('click', ()=>{
+      copyText(document.getElementById('tm-shopcode').textContent, 'Shop code copied');
+    });
+
+    if($t('tm-clock-csv')) $t('tm-clock-csv').addEventListener('click', ()=>{
+      const out = [['Name','Date','Clock in','Clock out','Hours']];
+      team.shifts.slice().sort((a,b)=> a.date<b.date?1:-1).forEach(s=>{
+        const a = tsDate(s.inAt), b = tsDate(s.outAt);
+        out.push([s.name||'Staff', s.date, hhmm(a), b?hhmm(b):'still on',
+                  fmtHM(a ? ((b?b.getTime():a.getTime()) - a.getTime()) : 0)]);
+      });
+      downloadCSV('clock-'+teamWeekStart()+'.csv', out);
+    });
+
+    // ---- composer ----
+    const input = $t('tm-input');
+    if(input){
+      input.addEventListener('input', ()=>{
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 120)+'px';
+      });
+      input.addEventListener('keydown', e=>{
+        if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendTeamMessage(); }
+      });
+    }
+    if($t('tm-send')) $t('tm-send').addEventListener('click', sendTeamMessage);
+    if($t('tm-clip')) $t('tm-clip').addEventListener('click', ()=>{
+      $t('tm-file').click();
+    });
+    if($t('tm-file')) $t('tm-file').addEventListener('change', e=>{
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if(!f) return;
+      // Pictures are shrunk before sending, so a big camera photo is fine. This
+      // cap is about what the browser can hold while reading the file, not what
+      // travels over the wire.
+      if(f.size > 25*1024*1024){ toast('That file is over 25MB — too big to open here'); return; }
+      team.pendingFile = f;
+      renderTeamAttach();
+    });
+  }
+
+  function renderTeamAttach(){
+    const box = document.getElementById('tm-attach');
+    if(!box) return;
+    if(!team.pendingFile){ box.innerHTML = ''; return; }
+    const isImg = (team.pendingFile.type||'').indexOf('image/')===0;
+    box.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;border:1px solid var(--rule);border-radius:3px;padding:6px 9px;background:#FFFDF8;">
+      <span>📎</span>
+      <span style="flex:1;word-break:break-all;">${esc(team.pendingFile.name)}${
+        isImg ? ' <span class="muted" style="font-size:10px;">· sent as a preview</span>' : ''}</span>
+      ${team.uploading ? '<span class="muted" style="font-size:10.5px;">shrinking…</span>'
+                       : '<button class="subtle-link" id="tm-attach-x">remove</button>'}
+    </div>`;
+    const x = document.getElementById('tm-attach-x');
+    if(x) x.addEventListener('click', ()=>{ team.pendingFile = null; renderTeamAttach(); });
+  }
+
+  async function sendTeamMessage(){
+    if(team.uploading) return;
+    const input = document.getElementById('tm-input');
+    const text = input ? input.value.trim() : '';
+    if(!text && !team.pendingFile) return;
+
+    let attachment = null;
+    if(team.pendingFile){
+      team.uploading = true;
+      renderTeamAttach();
+      try{
+        attachment = await makeAttachment(team.pendingFile);
+      }catch(err){
+        console.error(err);
+        team.uploading = false; renderTeamAttach();
+        toast(err && err.code==='too-big'
+          ? 'Too big to send here — send that one on WhatsApp'
+          : 'Could not read that file');
+        return;
+      }
+      team.uploading = false;
+      team.pendingFile = null;
+      renderTeamAttach();
+    }
+
+    if(input){ input.value = ''; input.style.height = 'auto'; }
+    try{
+      await teamShopRef().collection('messages').add({
+        from: currentUid,
+        fromName: (state.settings.shopName && state.settings.shopName!=='YOUR BUSINESS NAME')
+                    ? state.settings.shopName : 'Owner',
+        text, attachment, kind:'chat',
+        at: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(err){
+      console.error(err);
+      if(input){ input.value = text; }
+      toast('Message not sent');
+    }
+  }
+
+  // ---------- "send to staff" dialog ----------
+  //
+  // Deliberately a modal rather than an inline panel: the job card is re-rendered
+  // by half a dozen unrelated handlers, and a half-filled form with files staged
+  // in it must not be wiped out by a status change somewhere else on the page.
+  function openSendToStaffDialog(job){
+    if(!teamReady()){ toast('Needs a live connection'); return; }
+    if(!team.shop){
+      toast('Open the shop floor first — see the Team tab');
+      state.tab = 'teamchat'; renderAll();
+      return;
+    }
+    const existing = team.tasks.find(t=>t.jobId===job.id);
+    const modal = document.getElementById('lg-modal-root');
+    let files = [];
+
+    function paint(busyText){
+      modal.innerHTML = `
+        <div class="lg-overlay" id="ss-overlay">
+          <div class="lg-receipt" style="max-width:520px;text-align:left;">
+            <h2>Send to the shop floor</h2>
+            <div class="r-sub">${esc(job.customerName||'')}</div>
+            <div class="r-dashed"></div>
+            ${existing ? `<div style="font-size:12px;color:var(--amber-deep);margin-bottom:8px;">
+              This job is already on the floor (${esc(existing.stage||'SENT')})${existing.acceptedByName?` with ${esc(existing.acceptedByName)}`:''}.
+              Sending again adds a second card.</div>` : ''}
+            <div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">What they'll see</div>
+            <div style="font-size:12.5px;white-space:pre-wrap;background:#f4f4f4;border-radius:4px;padding:9px 10px;line-height:1.55;max-height:150px;overflow-y:auto;">${esc(jobSpecText(job)) || '<i>no spec recorded</i>'}</div>
+            <div style="font-size:11px;color:#777;margin-top:6px;">No price, no payment and no debt is sent — only the work and the pictures.</div>
+
+            <label for="ss-note" style="display:block;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#555;margin:12px 0 4px;">Note for the operator (optional)</label>
+            <textarea id="ss-note" rows="2" placeholder="e.g. matte finish, cut to size"
+              style="width:100%;padding:8px 9px;border:1px solid #bbb;border-radius:4px;font-family:var(--font-mono);font-size:12.5px;resize:vertical;"></textarea>
+
+            <div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#555;margin:12px 0 4px;">Pictures of the job</div>
+            <button class="lg-btn ghost small" id="ss-pick" type="button">📎 Add picture</button>
+            <div id="ss-files" style="margin-top:8px;font-size:12px;line-height:1.7;">${
+              files.length ? files.map((f,i)=>`<div>🖼 ${esc(f.name)} <button class="subtle-link ss-drop" data-i="${i}">remove</button></div>`).join('')
+                           : '<span style="color:#888;">Nothing attached yet.</span>'}</div>
+            <div style="font-size:11px;color:#777;margin-top:6px;">Shrunk to previews so they cost nothing to store — enough for the operator to see what the job is. Two or three is the limit; the print file itself still goes over the usual way.</div>
+            <input type="file" id="ss-file" multiple style="display:none" accept="image/*,application/pdf">
+
+            ${busyText ? `<div style="margin-top:12px;font-size:12px;">${esc(busyText)}</div>` : ''}
+
+            <div class="lg-receipt-actions">
+              <button class="lg-btn small" id="ss-go" type="button" ${busyText?'disabled':''}>Send to floor</button>
+              <button class="lg-btn ghost small" id="ss-cancel" type="button" ${busyText?'disabled':''}>Cancel</button>
+            </div>
+          </div>
+        </div>`;
+
+      const close = ()=>{ modal.innerHTML = ''; };
+      document.getElementById('ss-cancel').addEventListener('click', close);
+      document.getElementById('ss-overlay').addEventListener('click', e=>{
+        if(e.target.id==='ss-overlay' && !busyText) close();
+      });
+
+      if(document.getElementById('ss-pick')){
+        document.getElementById('ss-pick').addEventListener('click', ()=> document.getElementById('ss-file').click());
+        document.getElementById('ss-file').addEventListener('change', e=>{
+          const note = document.getElementById('ss-note').value;
+          Array.from(e.target.files||[]).forEach(f=>{
+            if(f.size > 25*1024*1024){ toast(f.name+' is over 25MB — skipped'); return; }
+            files.push(f);
+          });
+          e.target.value = '';
+          paint();
+          document.getElementById('ss-note').value = note;
+        });
+        modal.querySelectorAll('.ss-drop').forEach(b=>{
+          b.addEventListener('click', ()=>{
+            const note = document.getElementById('ss-note').value;
+            files.splice(Number(b.dataset.i), 1);
+            paint();
+            document.getElementById('ss-note').value = note;
+          });
+        });
+      }
+
+      document.getElementById('ss-go').addEventListener('click', async ()=>{
+        const note = document.getElementById('ss-note').value;
+        try{
+          await pushJobToStaff(job, note, files, (msg)=> paint(msg));
+          modal.innerHTML = '';
+          toast('Sent to the shop floor');
+          renderAll();
+        }catch(err){
+          console.error(err);
+          paint();
+          document.getElementById('ss-note').value = note;
+          toast(err && err.code==='card-too-big' ? 'Too many pictures for one job card — remove one and try again'
+              : err && err.code==='too-big'      ? 'That file is too big to attach here'
+              : 'Could not send it. Check your connection.');
+        }
+      });
+    }
+    paint();
+  }
+
+  function openImageOverlay(url, name){
+    const modal = document.getElementById('lg-modal-root');
+    modal.innerHTML = `
+      <div class="lg-overlay" id="img-overlay">
+        <div class="lg-receipt" style="max-width:760px;text-align:center;">
+          <img src="${esc(url)}" alt="${esc(name)}" style="max-width:100%;max-height:70vh;object-fit:contain;">
+          <div class="lg-receipt-actions">
+            <a class="lg-btn small" href="${esc(url)}" download="${esc(name)}" style="text-decoration:none;">⤓ Save</a>
+            <button class="lg-btn ghost small" id="img-x" type="button">Close</button>
+          </div>
+        </div>
+      </div>`;
+    const close = ()=>{ modal.innerHTML = ''; };
+    document.getElementById('img-x').addEventListener('click', close);
+    document.getElementById('img-overlay').addEventListener('click', e=>{
+      if(e.target.id==='img-overlay') close();
+    });
+  }
+
+  function copyText(txt, okMsg){
+    const done = ()=> toast(okMsg||'Copied');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(done).catch(()=>fallback());
+    }else fallback();
+    function fallback(){
+      const ta = document.createElement('textarea');
+      ta.value = txt; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); done(); }catch(e){ toast('Copy failed — select it by hand'); }
+      document.body.removeChild(ta);
+    }
+  }
+
   // ---------- auth ----------
   // The ledger is gated behind a Firebase Auth sign-in. Accounts are created by the owner
   // in the Firebase console (Authentication → Users), not here — there is deliberately no
@@ -5570,6 +6376,15 @@
         state.tab = 'inventory';
         renderAll();
       }
+      // Delegated, because "send to staff" appears on job cards that a dozen
+      // unrelated handlers re-render — binding it per render would mean adding a
+      // call to every one of those paths and missing one.
+      if(e.target.classList && e.target.classList.contains('job-send-staff')){
+        e.preventDefault();
+        const j = state.jobs.find(x=>x.id===e.target.dataset.id);
+        if(j) openSendToStaffDialog(j);
+        return;
+      }
       if(e.target.classList && e.target.classList.contains('goto-cp-account')){
         e.preventDefault();
         if(e.target.dataset.date) cpViewDate = e.target.dataset.date;
@@ -5593,6 +6408,9 @@
     markSaveStatus(true);
     setInterval(()=>autoSaveAll(), 5*60*1000);
     startAlarmWatch();
+    // The shop-floor listeners run from here, not from opening the Team tab: a
+    // staff member moving a job has to reach the books whichever tab is on screen.
+    startTeam();
   }
 
   // Entry point. Nothing is read or painted until Firebase tells us who (if anyone) is
@@ -5610,6 +6428,7 @@
         await startLedger();
       }else{
         // Signed out (or never signed in) — show the gate, keep the books hidden.
+        stopTeam();
         authEl.hidden = false;
         document.getElementById('ledger-root').hidden = true;
         authBtn.disabled = false;

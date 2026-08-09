@@ -1,23 +1,139 @@
 rules_version = '2';
 
-// Job Ledger — Firestore security rules
+// Oktopus — Firestore security rules
 //
-// Each signed-in user's entire ledger lives in ONE document whose id is their auth uid:
-//     ledgerData/{uid}
+// Two separate worlds live in this project:
 //
-// The rule below says: you may read or write that document only if you are signed in
-// AND the document id matches your own uid. So even though the project id and API key
-// are visible in the public page source, nobody can reach your books without your
-// email and password — and no signed-in user can reach anyone else's.
+//   ledgerData/{uid}   The owner's books. Money, debts, customers, profit splits.
+//                      Readable and writable ONLY by the person whose uid it is.
+//                      Staff never touch this collection — not even to read.
+//
+//   shops/{shopId}     The shared staff workspace behind staff.html: chat, job
+//                      cards, clock-in records. shopId is always the OWNER's uid,
+//                      which is what ties a workspace to a set of books without
+//                      ever exposing the books themselves.
+//
+// The split is the whole security design. A staff account can read every message
+// and job card in its shop and can clock itself in and out; it cannot read a
+// single naira of the ledger, because the ledger is a different collection whose
+// rule only ever matches the owner's own uid.
 //
 // Anything not matched below is denied by default.
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ---------- the owner's books (unchanged) ----------
+
     match /ledgerData/{userId} {
       allow read, write: if request.auth != null
                          && request.auth.uid == userId;
+    }
+
+    // ---------- which shop a signed-in person belongs to ----------
+    //
+    // A staff member signs in knowing only their email and password. This is the
+    // one document that tells their app which workspace to open. The owner writes
+    // it when approving someone, and the rule forces the shopId written to be the
+    // writer's own uid — so an owner can only ever enrol somebody into their OWN
+    // shop, never into anyone else's.
+
+    match /staffIndex/{userId} {
+      allow read:   if request.auth != null && request.auth.uid == userId;
+      allow create,
+            update: if request.auth != null
+                    && request.resource.data.shopId == request.auth.uid;
+      allow delete: if request.auth != null
+                    && resource.data.shopId == request.auth.uid;
+    }
+
+    // ---------- the shared staff workspace ----------
+
+    match /shops/{shopId} {
+
+      // The owner of a shop is, by definition, the person whose uid names it.
+      function isOwner() {
+        return request.auth != null && request.auth.uid == shopId;
+      }
+
+      // A member is someone the owner has enrolled and not since deactivated.
+      // get() inside a rule is not itself subject to rules, so this works even
+      // though a deactivated member cannot read the members collection.
+      function isMember() {
+        return request.auth != null
+               && exists(/databases/$(database)/documents/shops/$(shopId)/members/$(request.auth.uid))
+               && get(/databases/$(database)/documents/shops/$(shopId)/members/$(request.auth.uid)).data.active == true;
+      }
+
+      function inShop() {
+        return isOwner() || isMember();
+      }
+
+      // The shop document holds a display name and nothing sensitive, so any
+      // signed-in person may read it — that's what lets someone confirm they've
+      // typed the right shop code before asking to join. Knowing the code only
+      // ever earns you the right to ask; the owner still has to approve.
+      allow read:  if request.auth != null;
+      allow write: if isOwner();
+
+      match /members/{memberId} {
+        // Reading your own row is always allowed, so a deactivated account can be
+        // told "your access was turned off" instead of a bare permission error.
+        allow read:  if inShop() || (request.auth != null && request.auth.uid == memberId);
+        allow write: if isOwner();
+      }
+
+      match /joinRequests/{requestId} {
+        // Anyone signed in may ask to join a shop whose code they were given,
+        // but only under their own uid and only with their own identity attached.
+        allow create: if request.auth != null
+                      && request.auth.uid == requestId
+                      && request.resource.data.uid == request.auth.uid;
+        allow read,
+              delete: if isOwner() || (request.auth != null && request.auth.uid == requestId);
+        allow update: if isOwner();
+      }
+
+      match /messages/{messageId} {
+        allow read:   if inShop();
+        // You may only post as yourself. `from` is stamped by the client and
+        // checked here, so a message can never be attributed to someone else.
+        allow create: if inShop()
+                      && request.resource.data.from == request.auth.uid;
+        // Messages are a record of what was said. Nobody edits them; the owner
+        // can remove one.
+        allow update: if false;
+        allow delete: if isOwner();
+      }
+
+      match /tasks/{taskId} {
+        allow read:   if inShop();
+        allow create,
+              delete: if isOwner();
+        // The owner may change anything. A staff member may only move the job
+        // along — the price, the customer, the spec and the attachments are all
+        // outside the key set they are allowed to touch, so a job card cannot be
+        // rewritten from the shop floor.
+        allow update: if isOwner()
+                      || (isMember()
+                          && request.resource.data.diff(resource.data).affectedKeys()
+                               .hasOnly(['stage','acceptedBy','acceptedByName','acceptedAt',
+                                         'staffUpdate','staffNote','doneAt','updatedAt']));
+      }
+
+      match /shifts/{shiftId} {
+        // Everyone in the shop can see who is on the clock. You may only write
+        // your own shift — on update the check is against the record already
+        // stored, so one person's clock-out can never land on another's day.
+        allow read:   if inShop();
+        allow create: if inShop() && request.resource.data.uid == request.auth.uid;
+        allow update: if isOwner()
+                      || (isMember()
+                          && resource.data.uid == request.auth.uid
+                          && request.resource.data.uid == request.auth.uid);
+        allow delete: if isOwner();
+      }
+
     }
 
   }

@@ -6,9 +6,15 @@ the code: conventions, traps, and where things stand.
 
 ## Shape of the thing
 
-One self-contained `index.html` (~280KB), no build step, no dependencies. Edit it
-directly. Everything is inside one IIFE: state, render functions, handlers.
-`sw.js`, `manifest.json` and the icons sit beside it.
+Two self-contained pages, no build step, no dependencies. Edit them directly.
+Each is one IIFE: state, render functions, handlers.
+
+- **`index.html`** (~330KB) — the owner's ledger.
+- **`staff.html`** (~60KB) — the shop-floor app: chat, job cards, print files,
+  clock. Installs as a *separate* desktop PWA via `staff-manifest.json`.
+
+`sw.js` is shared by both and the icons sit beside them. `firestore.rules` is the
+real security boundary between the two.
 
 Rendering is `innerHTML` replacement — each tab has a `renderX()` that rebuilds
 `#lg-content` wholesale and re-attaches its own listeners.
@@ -57,6 +63,76 @@ Anything genuinely set for a test (a target figure, say) gets restored afterward
 and the user is told.
 
 Signing in cannot be done — it needs the owner's password.
+
+## The staff app and the wall between it and the books
+
+Two Firestore trees, and the wall between them is the entire security design:
+
+```
+ledgerData/{ownerUid}     the books. No rule anywhere grants staff any access.
+shops/{ownerUid}/…        members, joinRequests, messages, tasks, shifts
+staffIndex/{uid}          which shop a signed-in person belongs to
+```
+
+`shopId` is always the owner's uid, which is what ties a workspace to a set of
+books without exposing them. **A job card carries the spec, customer name, due
+date and artwork — never the price, payments or debt.** If you add a field to a
+pushed task, check it isn't money.
+
+**Staff write access is pinned by key set, not by trust.** `firestore.rules`
+allows a member to change only `stage`, `acceptedBy*`, `staffUpdate`,
+`staffNote`, `doneAt`, `updatedAt` on a task. Adding a staff-writable field means
+editing that `hasOnly([...])` list too, or the write is rejected server-side with
+no clue in the UI.
+
+**The two-way job sync is one-directional by construction.** Staff write
+`staffUpdate` with a monotonic `rev`; `applyStaffJobUpdates()` in the ledger
+compares it against `job.staffRev` and skips anything already applied. The ledger
+never writes back to the task, so there is no loop to break. Verified: replaying
+a rev is a no-op, an older rev is ignored, `ACCEPTED` sets the operator without
+touching status. Keep that property if you touch it.
+
+**Staff can never set DELIVERED** — it's tied to collecting the balance. The
+mirror only accepts `IN PRODUCTION` and `READY`.
+
+**A snapshot arriving mid-typing must not repaint.** `applyStaffJobUpdates()`
+checks `document.activeElement` and skips `renderAll()` if a field is focused —
+state is already correct, the next natural render shows it. Same class of bug as
+the Pending search losing focus.
+
+**`teamUnread` is a hoisted `var` on purpose.** `renderTabs()` is defined ~3400
+lines above the `const team` object and reads the badge count. A `const` read in
+its dead zone throws — and `typeof` does *not* save you from that, which is what
+the first attempt got wrong.
+
+**There is no file storage, on purpose.** Cloud Storage wants the Blaze plan and
+a card; the owner chose not to. Pictures ride *inside* the Firestore document as
+a data URI, which is why `makeAttachment()` exists in both files (duplicated —
+no build step, that's the project).
+
+The budget is not decoration. A Firestore document dies at 1 MiB and base64
+inflates by a third, so `ATTACH_BUDGET` is 400KB per picture and `TASK_BUDGET`
+700KB per job card, checked *before* the write so an over-budget card is refused
+in the dialog rather than bouncing off the server. `shrinkImage()` pulls two
+levers in order — scale to ≤1200px, then walk JPEG quality 0.82→0.4 — and
+retries at 70% of the dimension if quality alone can't get there. Verified worst
+case: a 4000×3000 pure-noise PNG (the hardest input JPEG can be handed) lands at
+358KB in ~2s. Real photos are a fraction of that.
+
+Two traps in that code:
+- **The white `fillRect` before `drawImage` is load-bearing.** JPEG has no alpha,
+  and logos arrive as transparent PNGs — without the fill they come out on black.
+- **`window.open()` on a `data:` URI is blocked by the browser.** Clicking a
+  picture must open an overlay (`openImageOverlay`, and the staff app's lightbox),
+  never a new tab. `<a download>` on a data URI does work.
+
+These are **previews and are labelled as such** in both apps. Don't let anything
+in the UI imply a staff member can print from them.
+
+**The service worker's navigation handler is load-bearing now.** It serves two
+shells by path. Answering a `staff.html` navigation with `index.html` would hand
+a staff member the ledger's sign-in screen. Bump `CACHE_VERSION` when either
+shell's asset list changes.
 
 ## How the money actually splits
 
@@ -120,8 +196,44 @@ the harness skips — clicking them does nothing there. Expose the handlers on
 that only accepts a chosen literal; it reads `window.firebase` at call time, so
 the stub can be swapped in and out around a single call.
 
+## Testing the staff app without the owner's password
+
+Same trick as the target harness. Copy `staff.html` to `_staff-test.html` **inside
+the project folder**, and inject a seed block just before `(async function boot(){`
+that assigns `me`, `shopId`, `shopName`, `myName`, `myRole`, fills `messages` /
+`tasks` / `shifts` with plain objects (use `{toDate:()=>new Date(...)}` where a
+Firestore Timestamp is expected), stubs `subscribeAll = function(){}` and
+`askNotifyPermission = function(){}`, then calls `startApp(); renderChat();`.
+Guard the real `boot()` behind the same flag so Firebase is never contacted.
+Delete the copy afterwards — neither test file is gitignored.
+
+For the ledger's Team tab, seed `index.html` the same way and additionally stub
+`teamReady = function(){ return true; }`, set `team.shop`, and fill `team.members`
+/ `requests` / `messages` / `tasks` / `shifts`. Stub `save` too, or the harness
+will attempt a real (unauthenticated, therefore denied) Firestore write.
+
+**The preview pane really does serve stale bytes here.** A `location.reload()`
+silently returned the previous session's page and the mirror test "passed" with
+results that were impossible for its first assertion. `preview_start` with a
+changed query string forced a genuinely fresh load. If a result looks impossible,
+suspect the cache before the code.
+
 ## Open items
 
+- **The staff app needs `firestore.rules` published before it does anything.**
+  Then press *Open the shop floor* on the Team tab. Until the rules are live,
+  approving someone fails with a permission error the UI reports but can't fix.
+- **Untested against a real second account.** Every render path in both apps was
+  exercised against seeded data; the mirror logic was verified directly
+  (idempotent replay, stale-rev rejection, `ACCEPTED` not touching status); and
+  the image shrinker was measured on real and worst-case inputs. What has *not*
+  run is a genuine two-account round trip: join request → approve → send a job →
+  accept → watch the ledger update. That needs a second Firebase account and
+  published rules. Do it once before the shop relies on it.
+- **Cloud Storage was considered and rejected** (needs Blaze and a card).
+  Cloudinary's free tier was the alternative if previews ever stop being enough —
+  25GB, no card, but files become public-by-URL, which loses the membership
+  gating the current design has for free.
 - **Netlify (`oktopusaccount.netlify.app`) is frozen** on a pre-sign-in build,
   out of credits. Kept deliberately. Revival steps are in the README.
 - **The monthly target is ₦8,450,000 on the PF basis**, set 6 Aug 2026. It encodes

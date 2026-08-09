@@ -1,14 +1,14 @@
 {
-  "name": "Oktopus Ledger",
-  "short_name": "Oktopus",
-  "id": "./",
-  "description": "Intake, production, delivery and cash record ledger.",
-  "start_url": "./",
-  "scope": "./",
+  "name": "Oktopus Staff",
+  "short_name": "Oktopus Staff",
+  "id": "./staff.html",
+  "description": "Shop floor: messages, job cards, print files and the clock.",
+  "start_url": "./staff.html",
+  "scope": "./staff.html",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#F6F1E5",
-  "theme_color": "#F6F1E5",
+  "theme_color": "#0F0FBE",
   "icons": [
     {
       "src": "icon-192.png",

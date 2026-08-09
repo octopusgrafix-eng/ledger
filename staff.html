@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oktopus Staff</title>
+<meta name="description" content="Shop floor: messages, job cards, print files and the clock.">
+<meta name="theme-color" content="#0F0FBE">
+<!-- Its own manifest, so this installs as a SEPARATE desktop app from the ledger.
+     Same origin, same service worker, different start_url and identity. -->
+<link rel="manifest" href="staff-manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Oktopus Staff">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+  // Same Firebase project as the ledger — that is what lets a job pushed from the
+  // books arrive here. The staff app reads a different collection tree (shops/…)
+  // and has no rule granting it any access to ledgerData, so nobody signed in
+  // here can reach the owner's money.
+  window.__FIREBASE_CONFIG__ = {
+    apiKey: "AIzaSyBHwX6GoFWc79UnI5SSmhxtbF4JTujLs5Y",
+    authDomain: "oktopus-a48fa.firebaseapp.com",
+    projectId: "oktopus-a48fa",
+    storageBucket: "oktopus-a48fa.firebasestorage.app",
+    messagingSenderId: "980126335010",
+    appId: "1:980126335010:web:0ec9e3c43f9fc4e9288a7b"
+  };
+  window.__FIREBASE_READY__ = false;
+</script>
+<style>
+  :root{
+    --font-slab: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Noto Serif', 'Times New Roman', serif;
+    --font-mono: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+
+    --ok-deep:#0F0FBE;
+    --ok-blue:#1131F4;
+    --ok-bright:#104FFA;
+
+    --ink:#151E38;
+    --paper:#F6F1E5;
+    --paper-deep:#EFE7D4;
+    --rule:#D9CFB4;
+    --amber:#B9791C;
+    --amber-deep:#8F5D12;
+    --teal:#2E655F;
+    --clay:#AB4530;
+    --green:#3E6B45;
+    --muted:#8A8168;
+    --paper-shadow: rgba(21,30,56,0.10);
+
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;-webkit-text-size-adjust:100%;}
+  body{
+    margin:0;background:var(--paper);color:var(--ink);
+    font-family:var(--font-mono);overflow:hidden;
+  }
+  h1,h2,h3{font-family:var(--font-slab);margin:0;}
+  button{font-family:inherit;}
+  .hidden{display:none !important;}
+
+  /* ---------- shared controls ---------- */
+  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:4px;margin-top:10px;}
+  input,select,textarea{
+    width:100%;font-family:var(--font-mono);font-size:13.5px;
+    padding:8px 9px;border:1px solid var(--rule);background:#FFFDF8;color:var(--ink);border-radius:2px;
+    transition:border-color 140ms ease, box-shadow 140ms ease;
+  }
+  input:focus,select:focus,textarea:focus{
+    outline:none;border-color:var(--ok-blue);box-shadow:0 0 0 3px rgba(17,49,244,0.16);
+  }
+  .btn{
+    font-family:var(--font-slab);font-weight:700;font-size:13.5px;
+    padding:9px 16px;border:1.5px solid var(--ok-deep);background:var(--ok-deep);color:var(--paper);
+    cursor:pointer;border-radius:2px;letter-spacing:0.3px;
+    transition:background-color 160ms ease, border-color 160ms ease,
+               transform 140ms var(--ease-out), box-shadow 160ms ease, opacity 160ms ease;
+  }
+  .btn:active{transform:scale(0.97);}
+  .btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(17,49,244,0.3);}
+  .btn:disabled{opacity:0.5;cursor:default;transform:none;}
+  .btn.ghost{background:transparent;color:var(--ink);border-color:var(--ink);}
+  .btn.danger{background:transparent;border-color:var(--clay);color:var(--clay);}
+  .btn.go{background:var(--green);border-color:var(--green);}
+  .btn.stop{background:var(--clay);border-color:var(--clay);}
+  .btn.small{padding:5px 10px;font-size:12px;}
+  @media (hover:hover) and (pointer:fine){
+    .btn:hover:not(:disabled){background:var(--ok-blue);border-color:var(--ok-blue);}
+    .btn.ghost:hover:not(:disabled){background:var(--paper-deep);border-color:var(--ok-blue);color:var(--ink);}
+    .btn.danger:hover:not(:disabled){background:var(--clay);color:#fff;}
+    .btn.go:hover:not(:disabled){background:#4A7E52;border-color:#4A7E52;}
+    .btn.stop:hover:not(:disabled){background:#C2513A;border-color:#C2513A;}
+  }
+  .card{
+    background:rgba(255,253,247,0.62);border:1px solid var(--rule);border-radius:3px;
+    padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 0 var(--paper-shadow);
+  }
+  .card-title{font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:10px;}
+  .stamp{
+    display:inline-flex;align-items:center;font-family:var(--font-mono);
+    font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;
+    border:2px solid currentColor;border-radius:5px;padding:3px 8px;
+    transform:rotate(-3deg);background:transparent;white-space:nowrap;
+  }
+  .stamp::before{content:"● ";font-size:9px;margin-right:3px;}
+  .stamp.sent{color:var(--amber-deep);}
+  .stamp.accepted{color:var(--teal);}
+  .stamp.production{color:var(--ok-blue);}
+  .stamp.ready{color:var(--green);}
+  .muted{color:var(--muted);}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:34px 12px;font-style:italic;}
+
+  /* ---------- gate screens (sign in / join) ---------- */
+  .gate{
+    position:fixed;inset:0;background:var(--paper);
+    display:flex;align-items:center;justify-content:center;padding:24px;
+    overflow-y:auto;z-index:40;
+  }
+  .gate-box{width:100%;max-width:380px;}
+  .gate-mark{text-align:center;margin-bottom:22px;}
+  .gate-mark img{width:64px;height:64px;border-radius:12px;}
+  .gate-mark .t{font-family:var(--font-slab);font-size:24px;font-weight:700;margin-top:10px;}
+  .gate-mark .s{font-size:10.5px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-top:3px;}
+  .gate-panel{
+    background:rgba(255,253,247,0.75);border:1px solid var(--rule);
+    border-top:3px double var(--ink);border-radius:3px;padding:20px;
+  }
+  .gate-msg{font-size:12.5px;margin-top:12px;min-height:16px;line-height:1.5;}
+  .gate-msg.err{color:var(--clay);}
+  .gate-msg.ok{color:var(--green);}
+  .gate-note{font-size:11.5px;color:var(--muted);margin-top:16px;line-height:1.6;text-align:center;}
+  /* Sign-in happens once per device, so it can afford a staged entrance. */
+  .gate-stage{opacity:0;transform:translateY(10px);animation:riseIn 520ms var(--ease-out) forwards;}
+  .gate-stage.d1{animation-delay:60ms;}
+  .gate-stage.d2{animation-delay:150ms;}
+  @keyframes riseIn{to{opacity:1;transform:none;}}
+  @media (prefers-reduced-motion:reduce){
+    .gate-stage{animation:none;opacity:1;transform:none;}
+    *{animation-duration:0.001ms !important;transition-duration:0.001ms !important;}
+  }
+
+  /* ---------- app frame ---------- */
+  #app{display:flex;flex-direction:column;height:100dvh;}
+  .top{
+    display:flex;align-items:center;gap:10px;padding:9px 14px;
+    border-bottom:3px double var(--ink);background:var(--paper);flex:0 0 auto;
+  }
+  .top .who{min-width:0;flex:1;}
+  .top .who .n{font-family:var(--font-slab);font-weight:700;font-size:15px;line-height:1.2;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .top .who .s{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block;margin-right:5px;vertical-align:1px;}
+  .dot.live{background:var(--green);}
+  .dot.off{background:var(--clay);}
+
+  .tabs{display:flex;gap:4px;padding:9px 14px 0;flex:0 0 auto;flex-wrap:wrap;}
+  .tab{
+    font-family:var(--font-slab);font-weight:600;font-size:13.5px;
+    padding:7px 13px;border:1.5px solid var(--ink);background:transparent;color:var(--ink);
+    cursor:pointer;border-radius:2px;position:relative;
+    transition:background-color 160ms ease,color 160ms ease,border-color 160ms ease,transform 140ms var(--ease-out);
+  }
+  .tab.active{background:var(--ok-deep);color:var(--paper);border-color:var(--ok-deep);}
+  .tab:active{transform:scale(0.97);}
+  @media (hover:hover) and (pointer:fine){.tab:hover:not(.active){background:var(--paper-deep);border-color:var(--ok-blue);}}
+  .tab .badge{
+    position:absolute;top:-6px;right:-6px;background:var(--clay);color:#fff;
+    font-family:var(--font-mono);font-size:10px;font-weight:700;line-height:1;
+    min-width:17px;padding:3px 4px;border-radius:9px;text-align:center;
+  }
+
+  .pane{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;}
+  .scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:14px;
+    max-width:900px;width:100%;margin:0 auto;}
+
+  /* ---------- chat ---------- */
+  #chat-scroll{display:flex;flex-direction:column;gap:2px;}
+  .daysep{text-align:center;font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;
+    color:var(--muted);margin:16px 0 10px;position:relative;}
+  .daysep::before,.daysep::after{content:"";position:absolute;top:50%;width:26%;height:1px;background:var(--rule);}
+  .daysep::before{left:0;} .daysep::after{right:0;}
+  .msg{display:flex;margin-top:8px;}
+  .msg.mine{justify-content:flex-end;}
+  .msg.run{margin-top:2px;}
+  .bub{
+    max-width:min(76%,520px);border:1px solid var(--rule);border-radius:10px;
+    padding:8px 11px;background:#FFFDF8;box-shadow:0 1px 0 var(--paper-shadow);
+    /* Arriving messages are frequent, so the entrance is short and cheap. */
+    animation:msgIn 180ms var(--ease-out);
+  }
+  @keyframes msgIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+  .msg.mine .bub{background:var(--ok-deep);border-color:var(--ok-deep);color:#F3F2FF;}
+  .bub .from{font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ok-blue);
+    font-weight:700;margin-bottom:3px;}
+  .bub .tx{font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
+  .bub .tm{font-size:9.5px;color:var(--muted);text-align:right;margin-top:3px;letter-spacing:0.5px;}
+  .msg.mine .bub .tm{color:rgba(243,242,255,0.7);}
+  .bub .tm .pend{font-style:italic;}
+  .bub img.shot{
+    display:block;max-width:100%;max-height:280px;border-radius:6px;margin-bottom:6px;
+    border:1px solid var(--rule);cursor:zoom-in;background:var(--paper-deep);
+  }
+  .filecard{
+    display:flex;align-items:center;gap:9px;border:1px dashed var(--rule);
+    border-radius:6px;padding:8px 10px;margin-bottom:6px;background:rgba(246,241,229,0.6);
+  }
+  .msg.mine .filecard{border-color:rgba(255,255,255,0.4);background:rgba(255,255,255,0.10);}
+  .filecard .ic{font-size:20px;flex:0 0 auto;}
+  .filecard .nm{font-size:12px;word-break:break-all;line-height:1.35;min-width:0;}
+  .filecard .sz{font-size:10px;color:var(--muted);}
+  .msg.mine .filecard .sz{color:rgba(243,242,255,0.7);}
+  .dl{font-size:11px;font-weight:700;color:var(--ok-blue);text-decoration:none;border-bottom:1px solid currentColor;}
+  .msg.mine .dl{color:#CFE0FF;}
+  .prevnote{font-size:9.5px;color:var(--muted);margin-top:2px;letter-spacing:0.3px;}
+  .msg.mine .prevnote{color:rgba(243,242,255,0.65);}
+  .sysmsg{text-align:center;font-size:11px;color:var(--muted);margin:8px 0;font-style:italic;}
+
+  .composer{
+    flex:0 0 auto;border-top:1px solid var(--rule);background:var(--paper);
+    padding:9px 14px;max-width:900px;width:100%;margin:0 auto;
+  }
+  .composer .row{display:flex;gap:8px;align-items:flex-end;}
+  .composer textarea{
+    resize:none;min-height:40px;max-height:132px;line-height:1.45;padding:10px;
+    border-radius:8px;overflow-y:auto;
+  }
+  .iconbtn{
+    flex:0 0 auto;width:40px;height:40px;border:1.5px solid var(--ink);background:transparent;
+    color:var(--ink);border-radius:8px;cursor:pointer;font-size:17px;line-height:1;
+    display:flex;align-items:center;justify-content:center;
+    transition:background-color 160ms ease,border-color 160ms ease,transform 140ms var(--ease-out);
+  }
+  .iconbtn:active{transform:scale(0.94);}
+  .iconbtn.send{background:var(--ok-deep);border-color:var(--ok-deep);color:var(--paper);}
+  .iconbtn:disabled{opacity:0.45;cursor:default;}
+  @media (hover:hover) and (pointer:fine){.iconbtn:hover:not(:disabled){border-color:var(--ok-blue);}}
+  .attachbar{display:flex;align-items:center;gap:9px;font-size:11.5px;margin-bottom:7px;
+    border:1px solid var(--rule);border-radius:6px;padding:6px 9px;background:#FFFDF8;}
+  .attachbar img{width:34px;height:34px;object-fit:cover;border-radius:4px;border:1px solid var(--rule);}
+  .attachbar .nm{flex:1;min-width:0;word-break:break-all;line-height:1.3;}
+  .bar{height:3px;background:var(--paper-deep);border-radius:2px;overflow:hidden;margin-top:5px;}
+  .bar > i{display:block;height:100%;background:var(--ok-blue);width:0;transition:width 180ms linear;}
+
+  /* ---------- jobs ---------- */
+  .job{border-left:3px solid var(--amber);}
+  .job.mine{border-left-color:var(--teal);}
+  .job.done{border-left-color:var(--green);}
+  .job .hd{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}
+  .job .ttl{font-family:var(--font-slab);font-size:16px;font-weight:700;line-height:1.3;}
+  .job .meta{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6;}
+  .job .spec{font-size:13px;line-height:1.6;white-space:pre-wrap;margin-top:9px;
+    border-top:1px dotted var(--rule);padding-top:9px;word-break:break-word;}
+  .job .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px;}
+  .due{font-size:11px;font-weight:700;letter-spacing:0.5px;}
+  .due.late{color:var(--clay);} .due.soon{color:var(--amber-deep);}
+  .atts{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px;}
+  .att{width:88px;text-decoration:none;color:inherit;display:block;}
+  .att img{width:88px;height:66px;object-fit:cover;border:1px solid var(--rule);border-radius:4px;
+    background:var(--paper-deep);display:block;cursor:zoom-in;}
+  .att .box{width:88px;height:66px;border:1px dashed var(--rule);border-radius:4px;display:flex;
+    align-items:center;justify-content:center;font-size:22px;background:rgba(246,241,229,0.6);}
+  .att .cap{font-size:9.5px;color:var(--muted);margin-top:3px;word-break:break-all;line-height:1.25;}
+  .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+
+  /* ---------- clock ---------- */
+  .clockface{text-align:center;padding:8px 0 4px;}
+  .clockface .big{font-family:var(--font-slab);font-size:44px;font-weight:700;letter-spacing:1px;line-height:1;}
+  .clockface .sub{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:6px;}
+  .punch{width:100%;padding:18px;font-size:17px;margin-top:16px;border-radius:4px;}
+  .shiftrow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;
+    padding:7px 0;border-bottom:1px dotted var(--rule);}
+  .shiftrow:last-child{border-bottom:none;}
+  .onclock{display:flex;align-items:center;gap:7px;font-size:12.5px;padding:5px 0;}
+  .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);flex:0 0 auto;
+    animation:pulse 2.4s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+
+  /* ---------- lightbox ---------- */
+  #lightbox{
+    position:fixed;inset:0;background:rgba(21,30,56,0.92);z-index:60;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:22px;
+    animation:fadeIn 160ms ease;
+  }
+  @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+  #lightbox img{max-width:100%;max-height:78vh;object-fit:contain;border-radius:4px;background:#000;}
+
+  #toast{
+    position:fixed;left:50%;bottom:22px;transform:translate(-50%,14px);
+    background:var(--ink);color:var(--paper);font-size:12.5px;padding:9px 16px;border-radius:3px;
+    opacity:0;pointer-events:none;transition:opacity 200ms ease,transform 200ms var(--ease-out);z-index:70;
+    max-width:88vw;text-align:center;
+  }
+  #toast.show{opacity:1;transform:translate(-50%,0);}
+
+  @media(min-width:760px){
+    .scroll{padding:18px 20px;}
+    .composer{padding:11px 20px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ SIGN IN ============ -->
+<div id="gate-auth" class="gate hidden">
+  <div class="gate-box">
+    <div class="gate-mark gate-stage">
+      <img src="icon-192.png" alt="">
+      <div class="t">Oktopus Staff</div>
+      <div class="s">Shop floor</div>
+    </div>
+    <form id="auth-form" class="gate-panel gate-stage d1" autocomplete="on">
+      <label for="auth-email">Email</label>
+      <input id="auth-email" type="email" autocomplete="username" required>
+      <label for="auth-pass">Password</label>
+      <input id="auth-pass" type="password" autocomplete="current-password" required>
+      <button id="auth-btn" class="btn" type="submit" style="width:100%;margin-top:16px;">Sign in</button>
+      <div id="auth-msg" class="gate-msg"></div>
+    </form>
+    <div class="gate-note gate-stage d2">
+      Accounts are created by the shop owner.<br>Ask them to set you up if you don't have one.
+    </div>
+  </div>
+</div>
+
+<!-- ============ JOIN A SHOP ============ -->
+<div id="gate-join" class="gate hidden">
+  <div class="gate-box">
+    <div class="gate-mark">
+      <img src="icon-192.png" alt="">
+      <div class="t">Almost in</div>
+      <div class="s" id="join-email"></div>
+    </div>
+    <div class="gate-panel" id="join-panel"></div>
+    <div class="gate-note">
+      <a href="#" id="join-signout" style="color:var(--ok-blue);">Sign out</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ THE APP ============ -->
+<div id="app" class="hidden">
+  <div class="top">
+    <div class="who">
+      <div class="n" id="top-shop">…</div>
+      <div class="s"><span class="dot" id="top-dot"></span><span id="top-name">…</span></div>
+    </div>
+    <button class="btn ghost small hidden" id="btn-install" type="button">⤓ Install</button>
+    <button class="btn ghost small" id="btn-signout" type="button">Sign out</button>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <!-- Chat gets its own permanent DOM: the message list is re-rendered on every
+       snapshot, but the composer below is never touched, so a half-typed message
+       survives incoming traffic. -->
+  <div class="pane hidden" id="pane-chat">
+    <div class="scroll" id="chat-scroll"></div>
+    <div class="composer">
+      <div id="attach-bar"></div>
+      <div class="row">
+        <button class="iconbtn" id="btn-attach" type="button" title="Send a picture of the job">📎</button>
+        <textarea id="msg-input" rows="1" placeholder="Message the shop…"></textarea>
+        <button class="iconbtn send" id="btn-send" type="button" title="Send">➤</button>
+      </div>
+      <input type="file" id="file-input" class="hidden" accept="image/*,application/pdf">
+    </div>
+  </div>
+
+  <div class="pane hidden" id="pane-jobs"><div class="scroll" id="jobs-scroll"></div></div>
+  <div class="pane hidden" id="pane-clock"><div class="scroll" id="clock-scroll"></div></div>
+</div>
+
+<div id="lightbox" class="hidden"></div>
+<div id="toast"></div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ============================================================
+  //  helpers
+  // ============================================================
+  const $ = id => document.getElementById(id);
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function pad2(n){ return String(n).padStart(2,'0'); }
+
+  // Never build a YYYY-MM-DD out of toISOString(). The shop is UTC+1, so local
+  // midnight is the PREVIOUS day in UTC — "today" would read as yesterday until
+  // 1am, and a shift clocked at 00:30 would land on the wrong date.
+  function isoOf(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function todayISO(){ return isoOf(new Date()); }
+
+  function toast(msg){
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(()=>el.classList.remove('show'), 2600);
+  }
+
+  // Firestore hands back a Timestamp for server-stamped fields, but a locally
+  // echoed write has null there until the server confirms it — treat that as now
+  // so an outgoing message doesn't briefly sort to 1970.
+  function tsToDate(ts){
+    if(!ts) return null;
+    if(typeof ts.toDate === 'function') return ts.toDate();
+    if(typeof ts === 'number') return new Date(ts);
+    if(typeof ts === 'string') return new Date(ts);
+    return null;
+  }
+  function hhmm(d){ return d ? pad2(d.getHours())+':'+pad2(d.getMinutes()) : '--:--'; }
+  function dayLabel(d){
+    const t = new Date(), y = new Date(); y.setDate(y.getDate()-1);
+    if(isoOf(d)===isoOf(t)) return 'Today';
+    if(isoOf(d)===isoOf(y)) return 'Yesterday';
+    return d.toLocaleDateString('en-NG',{weekday:'long', day:'2-digit', month:'long'});
+  }
+  function fmtBytes(n){
+    n = Number(n)||0;
+    if(n < 1024) return n+' B';
+    if(n < 1024*1024) return (n/1024).toFixed(0)+' KB';
+    return (n/1024/1024).toFixed(1)+' MB';
+  }
+  function fmtHours(ms){
+    if(!(ms>0)) return '0h 00m';
+    const mins = Math.floor(ms/60000);
+    return Math.floor(mins/60)+'h '+pad2(mins%60)+'m';
+  }
+  function isImage(a){ return a && typeof a.type==='string' && a.type.indexOf('image/')===0; }
+  // Monday-based week start, matching how the shop talks about a working week.
+  function weekStartISO(){
+    const d = new Date();
+    d.setDate(d.getDate() - ((d.getDay()+6)%7));
+    return isoOf(d);
+  }
+
+  function waitForFirebase(timeoutMs){
+    timeoutMs = timeoutMs || 8000;
+    return new Promise((resolve)=>{
+      const start = Date.now();
+      (function check(){
+        if(window.__FIREBASE_READY__){ resolve(true); return; }
+        if(window.firebase && window.firebase.initializeApp && window.firebase.auth){
+          try{
+            firebase.initializeApp(window.__FIREBASE_CONFIG__);
+            window.__FIREBASE_READY__ = true;
+          }catch(e){
+            console.error('Firebase failed to initialize:', e);
+            window.__FIREBASE_READY__ = false;
+          }
+          resolve(window.__FIREBASE_READY__);
+          return;
+        }
+        if(Date.now()-start > timeoutMs){ resolve(false); return; }
+        setTimeout(check, 50);
+      })();
+    });
+  }
+
+  function friendlyAuthError(code){
+    switch(code){
+      case 'auth/invalid-email':          return 'That doesn’t look like a valid email address.';
+      case 'auth/user-disabled':          return 'This account has been disabled.';
+      case 'auth/user-not-found':
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential':     return 'Email or password is not correct.';
+      case 'auth/too-many-requests':      return 'Too many attempts. Wait a minute and try again.';
+      case 'auth/network-request-failed': return 'No connection. Check your internet and try again.';
+      case 'auth/operation-not-allowed':  return 'Email sign-in is not enabled for this project yet.';
+      default: return 'Could not sign in. Please try again.';
+    }
+  }
+
+  // ============================================================
+  //  state
+  // ============================================================
+  const STAGES = ['SENT','ACCEPTED','IN PRODUCTION','READY'];
+  const STAGE_CLASS = {'SENT':'sent','ACCEPTED':'accepted','IN PRODUCTION':'production','READY':'ready'};
+  const NEXT_STAGE = {'SENT':'ACCEPTED','ACCEPTED':'IN PRODUCTION','IN PRODUCTION':'READY'};
+  const NEXT_LABEL = {'SENT':'Accept job','ACCEPTED':'Start production','IN PRODUCTION':'Mark ready'};
+
+  let db = null, auth = null;
+  let me = null;                 // firebase user
+  let shopId = null, shopName = '', myName = '', myRole = 'staff';
+  let tab = 'chat';
+  let messages = [], tasks = [], shifts = [];
+  let jobFilter = 'open';
+  let pending = null;            // staged attachment awaiting send
+  let uploading = false;
+  const unsubs = [];
+  let seenMsgCount = 0, unread = 0, firstChatPaint = true;
+
+  function stopAll(){ while(unsubs.length){ try{ unsubs.pop()(); }catch(e){} } }
+  function shopRef(){ return db.collection('shops').doc(shopId); }
+
+  function show(which){
+    ['gate-auth','gate-join','app'].forEach(id => $(id).classList.toggle('hidden', id!==which));
+  }
+
+  // ============================================================
+  //  sign in
+  // ============================================================
+  function authMsg(text, kind){
+    const el = $('auth-msg');
+    el.textContent = text || '';
+    el.className = 'gate-msg' + (kind ? ' '+kind : '');
+  }
+
+  $('auth-form').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email = $('auth-email').value.trim();
+    const pass  = $('auth-pass').value;
+    if(!email || !pass){ authMsg('Enter your email and password.', 'err'); return; }
+    const btn = $('auth-btn');
+    btn.disabled = true; btn.textContent = 'Signing in…'; authMsg('');
+    try{
+      if(!await waitForFirebase(8000)) throw {code:'auth/network-request-failed'};
+      await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+      await firebase.auth().signInWithEmailAndPassword(email, pass);
+      $('auth-pass').value = '';
+    }catch(err){
+      authMsg(friendlyAuthError(err && err.code), 'err');
+    }finally{
+      btn.disabled = false; btn.textContent = 'Sign in';
+    }
+  });
+
+  async function signOut(){
+    stopAll();
+    try{ await firebase.auth().signOut(); }catch(e){}
+  }
+  $('btn-signout').addEventListener('click', signOut);
+  $('join-signout').addEventListener('click', (e)=>{ e.preventDefault(); signOut(); });
+
+  // ============================================================
+  //  working out which shop this person belongs to
+  // ============================================================
+  //
+  // A staff member signs in knowing nothing but their password. staffIndex/{uid}
+  // is the one document they are allowed to read that says which workspace is
+  // theirs. The owner is a special case: their shop is named after their own uid,
+  // so they are always in, index or no index.
+
+  async function resolveMembership(user){
+    // Owner first — cheapest check, and it must not depend on an index row the
+    // owner never wrote for themselves.
+    try{
+      const own = await db.collection('shops').doc(user.uid).get();
+      if(own.exists){
+        shopId = user.uid;
+        shopName = own.data().name || 'My shop';
+        myRole = 'owner';
+        myName = (own.data().ownerName) || user.email || 'Owner';
+        return true;
+      }
+    }catch(e){ /* not the owner, or offline — fall through */ }
+
+    let idx = null;
+    try{ idx = await db.collection('staffIndex').doc(user.uid).get(); }catch(e){}
+    if(!idx || !idx.exists || !idx.data().shopId) return false;
+
+    shopId = idx.data().shopId;
+    let mem = null;
+    try{ mem = await shopRef().collection('members').doc(user.uid).get(); }catch(e){}
+    if(!mem || !mem.exists) return false;
+    if(mem.data().active === false){ return 'inactive'; }
+
+    myRole = mem.data().role || 'staff';
+    myName = mem.data().name || user.email || 'Staff';
+    try{
+      const s = await shopRef().get();
+      shopName = (s.exists && s.data().name) || 'The shop';
+    }catch(e){ shopName = 'The shop'; }
+    return true;
+  }
+
+  // ---------- the join screen ----------
+  function renderJoin(mode, extra){
+    $('join-email').textContent = (me && me.email) || '';
+    const panel = $('join-panel');
+
+    if(mode === 'pending'){
+      panel.innerHTML = `
+        <div style="text-align:center;">
+          <div style="font-size:30px;">⏳</div>
+          <div style="font-family:var(--font-slab);font-size:16px;font-weight:700;margin-top:8px;">Waiting for approval</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.6;">
+            You asked to join <b>${esc(extra || 'the shop')}</b>.<br>
+            The owner has to approve you. This screen opens by itself the moment they do —
+            you don't need to refresh.
+          </div>
+          <button class="btn ghost small" id="join-cancel" type="button" style="margin-top:16px;">Cancel request</button>
+        </div>`;
+      $('join-cancel').addEventListener('click', async ()=>{
+        try{ await shopRef().collection('joinRequests').doc(me.uid).delete(); }catch(e){}
+        try{ localStorage.removeItem('oktopus_staff_pending'); }catch(e){}
+        renderJoin('code');
+      });
+      return;
+    }
+
+    if(mode === 'inactive'){
+      panel.innerHTML = `
+        <div style="text-align:center;">
+          <div style="font-size:30px;">🔒</div>
+          <div style="font-family:var(--font-slab);font-size:16px;font-weight:700;margin-top:8px;">Access turned off</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.6;">
+            Your account is still valid, but the owner has switched off your access to this shop.
+            Speak to them if that's not right.
+          </div>
+        </div>`;
+      return;
+    }
+
+    panel.innerHTML = `
+      <div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:4px;">
+        You're signed in, but not attached to a shop yet. Enter the shop code the owner gave you.
+      </div>
+      <label for="join-code">Shop code</label>
+      <input id="join-code" type="text" spellcheck="false" placeholder="paste the code">
+      <label for="join-name">Your name</label>
+      <input id="join-name" type="text" placeholder="how the shop should see you"
+             value="${esc((me && me.displayName) || '')}">
+      <button class="btn" id="join-btn" type="submit" style="width:100%;margin-top:16px;">Ask to join</button>
+      <div id="join-msg" class="gate-msg"></div>`;
+
+    const msg = (t,k)=>{ const el=$('join-msg'); el.textContent=t||''; el.className='gate-msg'+(k?' '+k:''); };
+    $('join-btn').addEventListener('click', async ()=>{
+      const code = $('join-code').value.trim();
+      const name = $('join-name').value.trim();
+      if(!code){ msg('Enter the shop code.','err'); return; }
+      if(!name){ msg('Enter your name.','err'); return; }
+      const btn = $('join-btn');
+      btn.disabled = true; btn.textContent = 'Checking…'; msg('');
+      try{
+        const snap = await db.collection('shops').doc(code).get();
+        if(!snap.exists){ msg('No shop has that code. Check it with the owner.','err'); return; }
+        shopId = code;
+        const nm = snap.data().name || 'the shop';
+        // Remembered so a reload while waiting shows "waiting for approval"
+        // again rather than an empty form that looks like nothing happened.
+        try{ localStorage.setItem('oktopus_staff_pending', JSON.stringify({shopId:code, name:nm})); }catch(e){}
+        await shopRef().collection('joinRequests').doc(me.uid).set({
+          uid: me.uid,
+          name: name,
+          email: me.email || '',
+          at: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        renderJoin('pending', nm);
+        watchForApproval();
+      }catch(e){
+        console.error(e);
+        msg('Could not send the request. Check your connection and try again.','err');
+      }finally{
+        btn.disabled = false; btn.textContent = 'Ask to join';
+      }
+    });
+  }
+
+  // The owner approving someone writes staffIndex/{uid}. Watching it means the
+  // staff member's screen flips into the app on its own, with no refresh.
+  let approvalUnsub = null;
+  function watchForApproval(){
+    if(approvalUnsub) return;
+    approvalUnsub = db.collection('staffIndex').doc(me.uid).onSnapshot(async (snap)=>{
+      if(snap.exists && snap.data().shopId){
+        const ok = await resolveMembership(me);
+        if(ok === true){
+          if(approvalUnsub){ approvalUnsub(); approvalUnsub = null; }
+          startApp();
+        }
+      }
+    }, ()=>{});
+  }
+
+  // ============================================================
+  //  app boot
+  // ============================================================
+  function startApp(){
+    try{ localStorage.removeItem('oktopus_staff_pending'); }catch(e){}
+    show('app');
+    $('top-shop').textContent = shopName;
+    $('top-name').textContent = myName + (myRole==='owner' ? ' · owner' : '');
+    $('top-dot').className = 'dot live';
+    renderTabs();
+    subscribeAll();
+    switchTab('chat');
+    askNotifyPermission();
+  }
+
+  function renderTabs(){
+    const defs = [
+      {id:'chat',  label:'Chat'},
+      {id:'jobs',  label:'Jobs'},
+      {id:'clock', label:'Clock'}
+    ];
+    $('tabs').innerHTML = defs.map(t=>{
+      const badge = (t.id==='chat' && unread>0) ? `<span class="badge">${unread>99?'99+':unread}</span>` : '';
+      return `<button class="tab ${tab===t.id?'active':''}" data-tab="${t.id}" type="button">${t.label}${badge}</button>`;
+    }).join('');
+    $('tabs').querySelectorAll('.tab').forEach(b=>{
+      b.addEventListener('click', ()=> switchTab(b.dataset.tab));
+    });
+  }
+
+  function switchTab(id){
+    tab = id;
+    ['chat','jobs','clock'].forEach(t => $('pane-'+t).classList.toggle('hidden', t!==id));
+    if(id==='chat'){ unread = 0; updateTitle(); scrollChatToEnd(true); }
+    renderTabs();
+    if(id==='jobs') renderJobs();
+    if(id==='clock') renderClock();
+  }
+
+  function updateTitle(){
+    document.title = (unread>0 ? '('+unread+') ' : '') + 'Oktopus Staff';
+  }
+
+  function subscribeAll(){
+    stopAll();
+
+    unsubs.push(shopRef().collection('messages').orderBy('at','asc').limitToLast(300)
+      .onSnapshot(snap=>{
+        messages = snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+        onMessages(snap);
+      }, err=>{ console.error('messages', err); $('top-dot').className='dot off'; }));
+
+    unsubs.push(shopRef().collection('tasks').orderBy('createdAt','desc').limit(150)
+      .onSnapshot(snap=>{
+        tasks = snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+        if(tab==='jobs') renderJobs();
+        renderTabs();
+      }, err=>console.error('tasks', err)));
+
+    // A range filter on `date` alone keeps this on Firestore's automatic
+    // single-field index — adding `where uid ==` too would demand a composite
+    // index the owner would have to create by hand.
+    unsubs.push(shopRef().collection('shifts').where('date','>=', weekStartISO())
+      .onSnapshot(snap=>{
+        shifts = snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+        if(tab==='clock') renderClock();
+      }, err=>console.error('shifts', err)));
+  }
+
+  // ============================================================
+  //  chat
+  // ============================================================
+  function onMessages(snap){
+    const scroller = $('chat-scroll');
+    const wasNearEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
+
+    // Only messages that genuinely arrived from someone else count as unread,
+    // and only ones the server has actually stamped — a local echo of your own
+    // write would otherwise flash the badge at you.
+    if(!firstChatPaint){
+      snap.docChanges().forEach(ch=>{
+        if(ch.type !== 'added') return;
+        const d = ch.doc.data();
+        if(d.from === me.uid) return;
+        if(ch.doc.metadata.hasPendingWrites) return;
+        if(tab !== 'chat' || document.hidden){ unread++; }
+        notify(d);
+      });
+    }
+    renderChat();
+    updateTitle();
+    renderTabs();
+    scrollChatToEnd(firstChatPaint || wasNearEnd);
+    firstChatPaint = false;
+    seenMsgCount = messages.length;
+  }
+
+  function scrollChatToEnd(force){
+    if(!force) return;
+    const s = $('chat-scroll');
+    requestAnimationFrame(()=>{ s.scrollTop = s.scrollHeight; });
+  }
+
+  function renderChat(){
+    const s = $('chat-scroll');
+    if(!messages.length){
+      s.innerHTML = '<div class="empty">No messages yet.<br>Say hello, or send the first print file.</div>';
+      return;
+    }
+    let html = '', lastDay = '', lastFrom = '';
+    messages.forEach(m=>{
+      const d = tsToDate(m.at) || new Date();
+      const day = isoOf(d);
+      if(day !== lastDay){
+        html += `<div class="daysep">${esc(dayLabel(d))}</div>`;
+        lastDay = day; lastFrom = '';
+      }
+      if(m.kind === 'system'){
+        html += `<div class="sysmsg">${esc(m.text||'')}</div>`;
+        lastFrom = '';
+        return;
+      }
+      const mine = m.from === me.uid;
+      const run  = m.from === lastFrom;   // consecutive messages from one person
+      lastFrom = m.from;
+      const a = m.attachment;
+      let body = '';
+      if(a && a.url){
+        if(isImage(a)){
+          body += `<img class="shot" src="${esc(a.url)}" alt="${esc(a.name||'attachment')}"
+                        data-full="${esc(a.url)}" data-nm="${esc(a.name||'')}" loading="lazy">`;
+        }else{
+          body += `<div class="filecard">
+              <div class="ic">📄</div>
+              <div class="nm">${esc(a.name||'file')}<div class="sz">${esc(fmtBytes(a.size))}</div></div>
+            </div>`;
+        }
+        body += `<div style="margin-bottom:${m.text?'6px':'0'}">
+            <a class="dl" href="${esc(a.url)}" download="${esc(a.name||'')}">⤓ ${a.preview ? 'Save preview' : 'Download file'}</a>
+            ${a.preview ? '<div class="prevnote">preview only — ask for the print file</div>' : ''}
+          </div>`;
+      }
+      if(m.text) body += `<div class="tx">${esc(m.text)}</div>`;
+      const pendingWrite = !m.at;
+      html += `<div class="msg ${mine?'mine':''} ${run?'run':''}"><div class="bub">
+          ${(!mine && !run) ? `<div class="from">${esc(m.fromName||'Staff')}</div>` : ''}
+          ${body}
+          <div class="tm">${pendingWrite ? '<span class="pend">sending…</span>' : esc(hhmm(d))}</div>
+        </div></div>`;
+    });
+    s.innerHTML = html;
+    s.querySelectorAll('img.shot').forEach(img=>{
+      img.addEventListener('click', ()=> openLightbox(img.dataset.full, img.dataset.nm));
+    });
+  }
+
+  // ---------- composing ----------
+  const input = $('msg-input');
+  function autoGrow(){
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 132) + 'px';
+  }
+  input.addEventListener('input', autoGrow);
+  input.addEventListener('keydown', (e)=>{
+    // Enter sends; Shift+Enter is a newline. On a phone the on-screen keyboard's
+    // return key shouldn't fire a send, so only do this where there's a real one.
+    if(e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+  $('btn-send').addEventListener('click', sendMessage);
+  $('btn-attach').addEventListener('click', ()=> $('file-input').click());
+  $('file-input').addEventListener('change', (e)=>{
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if(!f) return;
+    // Images are shrunk before sending, so a big camera photo is fine. The cap is
+    // about what this device can hold in memory while it reads the file, not
+    // about what goes over the wire.
+    if(f.size > 25*1024*1024){ toast('That file is over 25MB — too big to open here.'); return; }
+    stageAttachment(f);
+  });
+
+  function stageAttachment(file){
+    pending = {file, previewUrl: null};
+    if(file.type.indexOf('image/')===0){
+      pending.previewUrl = URL.createObjectURL(file);
+    }
+    renderAttachBar();
+  }
+  function clearAttachment(){
+    if(pending && pending.previewUrl) URL.revokeObjectURL(pending.previewUrl);
+    pending = null;
+    renderAttachBar();
+  }
+  function renderAttachBar(){
+    const bar = $('attach-bar');
+    if(!pending){ bar.innerHTML = ''; return; }
+    const isImg = (pending.file.type||'').indexOf('image/')===0;
+    bar.innerHTML = `
+      <div class="attachbar">
+        ${pending.previewUrl ? `<img src="${pending.previewUrl}" alt="">` : '<div class="ic" style="font-size:20px;">📄</div>'}
+        <div class="nm">${esc(pending.file.name)}
+          <div class="sz muted" style="font-size:10px;">${esc(fmtBytes(pending.file.size))}${
+            isImg ? ' · will be sent as a preview' : ''}</div>
+          ${uploading ? '<div class="bar"><i style="width:100%;animation:none;"></i></div>' : ''}
+        </div>
+        ${uploading ? '<span class="muted" style="font-size:10.5px;">shrinking…</span>'
+                    : '<button class="btn ghost small" id="att-x" type="button">✕</button>'}
+      </div>`;
+    if(!uploading && $('att-x')) $('att-x').addEventListener('click', clearAttachment);
+  }
+
+  async function sendMessage(){
+    if(uploading) return;
+    const text = input.value.trim();
+    if(!text && !pending) return;
+
+    let attachment = null;
+    if(pending){
+      uploading = true;
+      $('btn-send').disabled = true;
+      $('btn-attach').disabled = true;
+      renderAttachBar();
+      try{
+        attachment = await makeAttachment(pending.file);
+      }catch(err){
+        console.error('attach failed', err);
+        uploading = false;
+        $('btn-send').disabled = false;
+        $('btn-attach').disabled = false;
+        renderAttachBar();
+        toast(err && err.code === 'too-big'
+          ? 'That file is too big to send here — send it on WhatsApp instead.'
+          : 'Could not read that file. Try another one.');
+        return;
+      }
+      uploading = false;
+      $('btn-send').disabled = false;
+      $('btn-attach').disabled = false;
+      clearAttachment();
+    }
+
+    // Clear the box before the network call, so the app feels instantaneous and
+    // a slow write can't eat what was typed next.
+    input.value = '';
+    autoGrow();
+
+    try{
+      await shopRef().collection('messages').add({
+        from: me.uid,
+        fromName: myName,
+        text: text,
+        attachment: attachment,
+        kind: 'chat',
+        at: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(err){
+      console.error('send failed', err);
+      input.value = text;
+      autoGrow();
+      toast('Message not sent. Check your connection.');
+    }
+  }
+
+  // ============================================================
+  //  attachments — shrunk to fit inside the Firestore document
+  // ============================================================
+  //
+  // There is no file storage behind this app, on purpose: it costs nothing and
+  // needs no setup. The picture travels inside the message itself, as a data URI.
+  //
+  // That buys a hard ceiling. A Firestore document is capped at 1 MiB, and base64
+  // inflates a file by a third, so an attachment is budgeted at 400KB of base64 —
+  // about a 300KB JPEG. That is a good-looking preview on any screen and
+  // emphatically NOT a print file. Anyone who needs the real artwork still gets
+  // it the way they always did.
+  const ATTACH_BUDGET = 400 * 1024;
+
+  function readAsDataURL(file){
+    return new Promise((resolve, reject)=>{
+      const r = new FileReader();
+      r.onload  = ()=> resolve(r.result);
+      r.onerror = ()=> reject(new Error('Could not read that file'));
+      r.readAsDataURL(file);
+    });
+  }
+  function loadImage(src){
+    return new Promise((resolve, reject)=>{
+      const img = new Image();
+      img.onload  = ()=> resolve(img);
+      img.onerror = ()=> reject(new Error('Not a readable image'));
+      img.src = src;
+    });
+  }
+
+  // Two levers, used in that order: scale down, then walk the JPEG quality down.
+  // Quality alone can't rescue a 6000px phone photo, and scaling alone throws
+  // away detail that a lower quality would have kept.
+  async function shrinkImage(file){
+    const img = await loadImage(await readAsDataURL(file));
+    let dim = 1200;
+    for(let pass=0; pass<4; pass++){
+      const scale = Math.min(1, dim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      // JPEG has no alpha channel. Without this fill, anything transparent —
+      // most logos arrive as transparent PNGs — comes out on a black background.
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      for(let q=0.82; q>=0.4; q-=0.12){
+        const out = c.toDataURL('image/jpeg', q);
+        if(out.length <= ATTACH_BUDGET) return {url:out, w, h};
+      }
+      dim = Math.round(dim * 0.7);
+    }
+    const e = new Error('too big'); e.code = 'too-big'; throw e;
+  }
+
+  async function makeAttachment(file){
+    if((file.type||'').indexOf('image/') === 0){
+      const r = await shrinkImage(file);
+      return {url:r.url, name:file.name, size:file.size, type:'image/jpeg',
+              w:r.w, h:r.h, preview:true, originalType:file.type||''};
+    }
+    // A PDF or an .ai can't be shrunk. A small one can still travel whole; a real
+    // print file can't, and saying so beats letting it fail on the way out.
+    const data = await readAsDataURL(file);
+    if(data.length > ATTACH_BUDGET){ const e = new Error('too big'); e.code = 'too-big'; throw e; }
+    return {url:data, name:file.name, size:file.size,
+            type:file.type||'application/octet-stream', preview:false};
+  }
+
+  // ============================================================
+  //  jobs
+  // ============================================================
+  function dueBadge(due){
+    if(!due) return '';
+    const today = todayISO();
+    if(due < today)  return `<span class="due late">⚠ ${esc(due)} — overdue</span>`;
+    if(due === today) return `<span class="due soon">Due today</span>`;
+    return `<span class="due muted">Due ${esc(due)}</span>`;
+  }
+
+  function renderJobs(){
+    const list = tasks.filter(t=>{
+      const stage = t.stage || 'SENT';
+      if(jobFilter === 'open') return stage !== 'READY';
+      if(jobFilter === 'mine') return t.acceptedBy === me.uid && stage !== 'READY';
+      if(jobFilter === 'done') return stage === 'READY';
+      return true;
+    });
+
+    const counts = {
+      open: tasks.filter(t=>(t.stage||'SENT')!=='READY').length,
+      mine: tasks.filter(t=>t.acceptedBy===me.uid && (t.stage||'SENT')!=='READY').length,
+      done: tasks.filter(t=>(t.stage||'SENT')==='READY').length
+    };
+
+    const filters = [
+      ['open', 'Open ('+counts.open+')'],
+      ['mine', 'Mine ('+counts.mine+')'],
+      ['done', 'Ready ('+counts.done+')'],
+      ['all',  'All']
+    ];
+
+    $('jobs-scroll').innerHTML = `
+      <div class="filters">
+        ${filters.map(([k,l])=>`<button class="btn ${jobFilter===k?'':'ghost'} small" data-f="${k}" type="button">${esc(l)}</button>`).join('')}
+      </div>
+      ${!list.length ? `<div class="empty">${
+          jobFilter==='mine' ? 'You haven’t accepted any job yet.<br>Check <b>Open</b> for work waiting to be claimed.'
+        : jobFilter==='done' ? 'Nothing marked ready yet.'
+        : 'No jobs have been sent to the shop floor yet.'}</div>`
+      : list.map(renderJobCard).join('')}`;
+
+    $('jobs-scroll').querySelectorAll('[data-f]').forEach(b=>{
+      b.addEventListener('click', ()=>{ jobFilter = b.dataset.f; renderJobs(); });
+    });
+    $('jobs-scroll').querySelectorAll('[data-advance]').forEach(b=>{
+      b.addEventListener('click', ()=> advanceJob(b.dataset.advance, b));
+    });
+    $('jobs-scroll').querySelectorAll('.att img[data-full]').forEach(img=>{
+      img.addEventListener('click', (e)=>{
+        e.preventDefault();
+        openLightbox(img.dataset.full, img.dataset.nm);
+      });
+    });
+  }
+
+  function renderJobCard(t){
+    const stage = t.stage || 'SENT';
+    const mine  = t.acceptedBy === me.uid;
+    const next  = NEXT_STAGE[stage];
+    const atts  = Array.isArray(t.attachments) ? t.attachments : [];
+    // Once someone has claimed a job, only they (or the owner) move it along —
+    // otherwise two people quietly work the same ticket.
+    const canAdvance = next && (stage === 'SENT' || mine || myRole === 'owner');
+
+    return `<div class="card job ${stage==='READY'?'done':(mine?'mine':'')}">
+      <div class="hd">
+        <div style="min-width:0;">
+          <div class="ttl">${esc(t.title || 'Job')}</div>
+          <div class="meta">
+            ${t.customerName ? esc(t.customerName)+' · ' : ''}${dueBadge(t.dueDate)}
+            ${t.acceptedByName ? `<br>Taken by <b>${esc(t.acceptedByName)}</b>${mine?' (you)':''}` : ''}
+          </div>
+        </div>
+        <span class="stamp ${STAGE_CLASS[stage]||'sent'}">${esc(stage)}</span>
+      </div>
+      ${t.spec ? `<div class="spec">${esc(t.spec)}</div>` : ''}
+      ${atts.length ? `<div class="atts">${atts.map(a=>
+          isImage(a)
+            ? `<a class="att" href="${esc(a.url)}" download="${esc(a.name||'')}">
+                 <img src="${esc(a.url)}" alt="${esc(a.name||'')}" data-full="${esc(a.url)}" data-nm="${esc(a.name||'')}" loading="lazy">
+                 <div class="cap">⤓ ${esc(a.name||'file')}</div></a>`
+            : `<a class="att" href="${esc(a.url)}" download="${esc(a.name||'')}">
+                 <div class="box">📄</div><div class="cap">⤓ ${esc(a.name||'file')}</div></a>`
+        ).join('')}</div>
+        ${atts.some(a=>a.preview) ? '<div class="prevnote" style="margin-top:5px;">Previews, to show you the job — collect the print file from the owner.</div>' : ''}` : ''}
+      ${t.staffNote ? `<div class="meta" style="margin-top:8px;">Note: ${esc(t.staffNote)}</div>` : ''}
+      <div class="acts">
+        ${canAdvance ? `<button class="btn ${stage==='SENT'?'go':''} small" data-advance="${esc(t.id)}" type="button">${esc(NEXT_LABEL[stage])}</button>` : ''}
+        ${(!canAdvance && next) ? `<span class="muted" style="font-size:11.5px;">${esc(t.acceptedByName||'Someone else')} is on this one.</span>` : ''}
+        ${stage==='READY' ? '<span class="muted" style="font-size:11.5px;">Ready — the owner closes it off in the ledger.</span>' : ''}
+      </div>
+    </div>`;
+  }
+
+  async function advanceJob(id, btn){
+    const t = tasks.find(x=>x.id===id);
+    if(!t) return;
+    const stage = t.stage || 'SENT';
+    const next  = NEXT_STAGE[stage];
+    if(!next) return;
+
+    btn.disabled = true;
+    const patch = {
+      stage: next,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      // The ledger watches this one field to decide whether it has already
+      // applied a change. Bumping a counter makes it idempotent — replaying the
+      // same snapshot twice can't double-apply, and the ledger writing back
+      // can't bounce a change into here again.
+      staffUpdate: {
+        stage: next,
+        by: me.uid,
+        byName: myName,
+        rev: (t.staffUpdate && Number(t.staffUpdate.rev) || 0) + 1,
+        at: new Date().toISOString()
+      }
+    };
+    if(next === 'ACCEPTED'){
+      patch.acceptedBy = me.uid;
+      patch.acceptedByName = myName;
+      patch.acceptedAt = firebase.firestore.FieldValue.serverTimestamp();
+    }
+    if(next === 'READY') patch.doneAt = firebase.firestore.FieldValue.serverTimestamp();
+
+    try{
+      await shopRef().collection('tasks').doc(id).update(patch);
+      toast(next === 'ACCEPTED' ? 'Job accepted — it’s yours.' : 'Job moved to '+next+'.');
+    }catch(err){
+      console.error('advance failed', err);
+      btn.disabled = false;
+      toast('Could not update the job. Check your connection.');
+    }
+  }
+
+  // ============================================================
+  //  clock
+  // ============================================================
+  // One document per person per day: `{uid}_{YYYY-MM-DD}`. That makes a double
+  // clock-in impossible by construction rather than by checking first.
+  function myShiftToday(){
+    return shifts.find(s => s.id === me.uid+'_'+todayISO()) || null;
+  }
+
+  function renderClock(){
+    const today = todayISO();
+    const mine  = myShiftToday();
+    const on    = !!(mine && mine.inAt && !mine.outAt);
+    const inD   = mine ? tsToDate(mine.inAt) : null;
+    const outD  = mine ? tsToDate(mine.outAt) : null;
+
+    const elapsed = on && inD ? (Date.now() - inD.getTime()) : 0;
+    const doneToday = (inD && outD) ? (outD.getTime() - inD.getTime()) : 0;
+
+    // This week's total, mine only. The subscription pulls the whole shop's week
+    // (one index, one listener) and the filtering happens here.
+    const myWeek = shifts.filter(s => s.uid === me.uid);
+    const weekMs = myWeek.reduce((sum,s)=>{
+      const a = tsToDate(s.inAt), b = tsToDate(s.outAt);
+      if(!a) return sum;
+      return sum + ((b ? b.getTime() : (s.date===today ? Date.now() : a.getTime())) - a.getTime());
+    }, 0);
+
+    const onNow = shifts.filter(s => s.date===today && s.inAt && !s.outAt);
+
+    $('clock-scroll').innerHTML = `
+      <div class="card">
+        <div class="clockface">
+          <div class="big">${on ? fmtHours(elapsed) : (doneToday ? fmtHours(doneToday) : '--:--')}</div>
+          <div class="sub">${on ? 'On the clock since '+hhmm(inD)
+                             : doneToday ? 'Worked today · '+hhmm(inD)+' → '+hhmm(outD)
+                             : 'Not clocked in'}</div>
+        </div>
+        ${mine && mine.outAt
+          ? `<button class="btn ghost punch" id="punch" type="button" disabled>Day already closed</button>
+             <div class="muted" style="font-size:11.5px;text-align:center;margin-top:9px;">
+               You've clocked out for today. Ask the owner if it needs correcting.</div>`
+          : `<button class="btn ${on?'stop':'go'} punch" id="punch" type="button">${on ? '⏹ Clock out' : '▶ Clock in'}</button>`}
+      </div>
+
+      <div class="card">
+        <div class="card-title">On the clock now</div>
+        ${!onNow.length ? '<div class="muted" style="font-size:12.5px;">Nobody is clocked in.</div>'
+          : onNow.map(s=>`<div class="onclock"><span class="pulse"></span>
+              <span>${esc(s.name||'Staff')}${s.uid===me.uid?' (you)':''}</span>
+              <span class="muted" style="margin-left:auto;">since ${esc(hhmm(tsToDate(s.inAt)))}</span>
+            </div>`).join('')}
+      </div>
+
+      <div class="card">
+        <div class="card-title">Your week · ${esc(fmtHours(weekMs))}</div>
+        ${!myWeek.length ? '<div class="muted" style="font-size:12.5px;">No shifts recorded this week.</div>'
+          : myWeek.slice().sort((a,b)=> a.date < b.date ? 1 : -1).map(s=>{
+              const a = tsToDate(s.inAt), b = tsToDate(s.outAt);
+              const ms = a ? ((b?b.getTime():(s.date===today?Date.now():a.getTime())) - a.getTime()) : 0;
+              return `<div class="shiftrow">
+                <span>${esc(s.date)}${s.date===today?' <span class="muted">· today</span>':''}</span>
+                <span class="muted">${esc(hhmm(a))} → ${b?esc(hhmm(b)):'<i>still on</i>'}</span>
+                <span style="font-weight:700;">${esc(fmtHours(ms))}</span>
+              </div>`;
+            }).join('')}
+      </div>`;
+
+    const punch = $('punch');
+    if(punch && !punch.disabled) punch.addEventListener('click', ()=> doPunch(on));
+  }
+
+  async function doPunch(currentlyOn){
+    const btn = $('punch');
+    btn.disabled = true;
+    const id = me.uid+'_'+todayISO();
+    const ref = shopRef().collection('shifts').doc(id);
+    try{
+      if(currentlyOn){
+        await ref.update({outAt: firebase.firestore.FieldValue.serverTimestamp()});
+        toast('Clocked out. Have a good evening.');
+      }else{
+        await ref.set({
+          uid: me.uid, name: myName, date: todayISO(),
+          inAt: firebase.firestore.FieldValue.serverTimestamp(),
+          outAt: null
+        });
+        toast('Clocked in at '+hhmm(new Date())+'.');
+      }
+    }catch(err){
+      console.error('punch failed', err);
+      btn.disabled = false;
+      toast('Could not record that. Check your connection.');
+    }
+  }
+
+  // The running total on the clock face is only true for the second it was
+  // painted, so keep it moving — but only while that tab is actually on screen.
+  setInterval(()=>{
+    if(tab==='clock' && !document.hidden && me && shopId) renderClock();
+  }, 30000);
+
+  // ============================================================
+  //  lightbox
+  // ============================================================
+  function openLightbox(url, name){
+    const box = $('lightbox');
+    box.innerHTML = `
+      <img src="${esc(url)}" alt="${esc(name||'')}">
+      <div style="display:flex;gap:10px;">
+        <a class="btn small" href="${esc(url)}" download="${esc(name||'')}"
+           style="text-decoration:none;">⤓ Save</a>
+        <button class="btn ghost small" id="lb-x" type="button" style="color:var(--paper);border-color:var(--paper);">Close</button>
+      </div>`;
+    box.classList.remove('hidden');
+    const close = ()=>{ box.classList.add('hidden'); box.innerHTML=''; };
+    $('lb-x').addEventListener('click', close);
+    box.addEventListener('click', e=>{ if(e.target===box) close(); });
+    document.addEventListener('keydown', function onEsc(e){
+      if(e.key==='Escape'){ close(); document.removeEventListener('keydown', onEsc); }
+    });
+  }
+
+  // ============================================================
+  //  desktop notifications
+  // ============================================================
+  function askNotifyPermission(){
+    if(!('Notification' in window)) return;
+    if(Notification.permission !== 'default') return;
+    // Asking on load gets refused out of reflex. Ask the first time they actually
+    // send something, by which point the app has earned the question.
+    const once = ()=>{
+      $('btn-send').removeEventListener('click', once);
+      try{ Notification.requestPermission(); }catch(e){}
+    };
+    $('btn-send').addEventListener('click', once);
+  }
+  function notify(d){
+    if(!('Notification' in window) || Notification.permission !== 'granted') return;
+    if(!document.hidden) return;
+    try{
+      const n = new Notification(d.fromName || 'Oktopus Staff', {
+        body: d.text || (d.attachment ? '📎 sent a file' : ''),
+        icon: 'icon-192.png',
+        tag: 'oktopus-chat'
+      });
+      n.onclick = ()=>{ window.focus(); n.close(); };
+    }catch(e){}
+  }
+
+  // ============================================================
+  //  install prompt
+  // ============================================================
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e)=>{
+    e.preventDefault();
+    deferredPrompt = e;
+    $('btn-install').classList.remove('hidden');
+  });
+  $('btn-install').addEventListener('click', async ()=>{
+    if(!deferredPrompt) return;
+    deferredPrompt.prompt();
+    try{ await deferredPrompt.userChoice; }catch(e){}
+    deferredPrompt = null;
+    $('btn-install').classList.add('hidden');
+  });
+  window.addEventListener('appinstalled', ()=> $('btn-install').classList.add('hidden'));
+
+  // ============================================================
+  //  boot
+  // ============================================================
+  (async function boot(){
+    const ready = await waitForFirebase(9000);
+    if(!ready){
+      show('gate-auth');
+      authMsg('Can’t reach the sign-in service. Check your connection.', 'err');
+      return;
+    }
+    db = firebase.firestore();
+    auth = firebase.auth();
+
+    auth.onAuthStateChanged(async (user)=>{
+      stopAll();
+      if(approvalUnsub){ approvalUnsub(); approvalUnsub = null; }
+      messages = []; tasks = []; shifts = [];
+      firstChatPaint = true; unread = 0; updateTitle();
+
+      if(!user){
+        me = null; shopId = null;
+        show('gate-auth');
+        return;
+      }
+      me = user;
+      const result = await resolveMembership(user);
+      if(result === true){
+        startApp();
+      }else if(result === 'inactive'){
+        show('gate-join');
+        renderJoin('inactive');
+      }else{
+        show('gate-join');
+        // If they already asked and are still waiting, say so — an empty form
+        // after a reload reads as "my request never went through".
+        let waiting = null;
+        try{ waiting = JSON.parse(localStorage.getItem('oktopus_staff_pending')||'null'); }catch(e){}
+        if(waiting && waiting.shopId){
+          shopId = waiting.shopId;
+          let stillPending = false;
+          try{
+            const r = await shopRef().collection('joinRequests').doc(user.uid).get();
+            stillPending = r.exists;
+          }catch(e){}
+          if(stillPending){ renderJoin('pending', waiting.name); watchForApproval(); return; }
+          try{ localStorage.removeItem('oktopus_staff_pending'); }catch(e){}
+        }
+        renderJoin('code');
+        watchForApproval();
+      }
+    });
+  })();
+
+  // The service worker is what makes this installable and instant to open. It is
+  // shared with the ledger — same origin, same file — and routes each shell by path.
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('sw.js').catch(err=> console.warn('SW registration failed', err));
+    });
+  }
+})();
+</script>
+</body>
+</html>

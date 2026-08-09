@@ -4,9 +4,15 @@ A single-file business management app for the print shop: job pipeline, pricing,
 customer debt tracking, receipts, stock purchases, and profit/tithe splits —
 all in one self-contained `index.html`.
 
+Alongside it sits **`staff.html`** — a separate installable app for the shop
+floor: chat, the jobs you send out, the print files, and a clock. Staff can see
+the work; they cannot see the money.
+
 ## Live site
 
-**https://octopusgrafix-eng.github.io/ledger/**
+**https://octopusgrafix-eng.github.io/ledger/** — the ledger (owner)
+
+**https://octopusgrafix-eng.github.io/ledger/staff.html** — the staff app
 
 Served by GitHub Pages from the `main` branch, root folder. No build step — Pages
 publishes `index.html` as-is, and it's free and unmetered because this repo is public.
@@ -71,6 +77,88 @@ off the local cache and retries on the next save.
 Access is enforced by [`firestore.rules`](firestore.rules): a ledger document is
 readable and writable only by the signed-in user whose uid matches it. Publish
 these in the Firebase console under *Firestore → Rules*.
+
+## The staff app
+
+`staff.html` is a second PWA on the same origin and the same Firebase project.
+It installs as its own desktop app with its own icon — it has its own
+`staff-manifest.json`, and the shared service worker serves each shell by path.
+
+### What staff can and cannot see
+
+Staff data lives in a **different Firestore collection** to the books:
+
+```
+ledgerData/{ownerUid}          the books — owner only, no staff rule exists
+shops/{ownerUid}/members       who is on the team
+shops/{ownerUid}/joinRequests  people asking to be let in
+shops/{ownerUid}/messages      the chat
+shops/{ownerUid}/tasks         job cards pushed from the ledger
+shops/{ownerUid}/shifts        clock in / clock out, one doc per person per day
+staffIndex/{uid}               which shop a signed-in person belongs to
+```
+
+`shopId` is always the owner's uid. A job card carries the spec, the customer
+name, the due date and the artwork — **never the price, the payments or the
+debt**. There is no rule anywhere that lets a staff account read `ledgerData`.
+
+### What staff can do
+
+- **Chat** with the shop in real time, with pictures attached
+- **Accept a job**, then move it *ACCEPTED → IN PRODUCTION → READY*
+- **See the artwork** for a job as a preview (see below)
+- **Clock in and out**, and see who else is on the clock
+
+Staff can never mark a job DELIVERED — that is tied to collecting the balance,
+so it stays with the owner. Firestore rules pin exactly which fields a staff
+account may write on a job card; everything else is rejected server-side.
+
+### Job updates flow back into the ledger
+
+When a staff member moves a job, the ledger applies it to the matching job:
+*IN PRODUCTION* and *READY* update the status and add a history entry, and
+accepting a job fills in the Operator. Each change carries a revision number the
+job remembers, so replaying a change can't double-apply it and the ledger never
+writes anything the staff app reads back.
+
+### Pictures, and what they are not
+
+There is **no file storage behind this app**, deliberately — it costs nothing and
+needs no console setup or payment card. A picture travels *inside* the message or
+job card, as a data URI.
+
+That buys a hard ceiling. A Firestore document is capped at 1 MiB and base64
+inflates a file by a third, so before sending, an image is scaled to at most
+1200px and its JPEG quality walked down until it fits a 400KB budget — about a
+300KB JPEG. A whole job card is budgeted at 700KB across all of its pictures.
+
+**These are previews, not print files.** They are there so the operator can see
+what the job is; the artwork itself still reaches them the way it always has.
+The apps label them as previews rather than letting anyone assume otherwise.
+
+Non-image files go through untouched *if* they fit the same 400KB budget — a
+small PDF will, a real print file won't, and the app says so instead of failing
+silently.
+
+### One-time setup in the Firebase console
+
+Only one thing, and only once:
+
+1. **Firestore → Rules** — paste [`firestore.rules`](firestore.rules), Publish.
+2. In the ledger, open the **Team** tab and press **Open the shop floor**.
+
+### Adding a staff member
+
+1. **Authentication → Users → Add user** in the Firebase console — set their
+   email and a password. There is no sign-up form, so nobody can let themselves in.
+2. Send them the staff app link and the **shop code** (both are on the Team tab,
+   with copy buttons).
+3. They sign in, paste the code, and appear under **Waiting to join**.
+4. Press **Approve**. Their screen flips into the app on its own.
+
+To cut someone off, use **turn access off** on the Team tab — it takes effect
+immediately, and because pictures live inside the documents themselves, losing
+access to the shop loses access to everything in it.
 
 ## Local development
 
