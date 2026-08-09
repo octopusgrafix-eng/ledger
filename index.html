@@ -5738,7 +5738,7 @@
             type:file.type||'application/octet-stream', preview:false};
   }
 
-  async function pushJobToStaff(job, note, files, onProgress){
+  async function pushJobToStaff(job, note, files, assignee, onProgress){
     const attachments = [];
     let used = 0;
     for(let i=0; i<files.length; i++){
@@ -5763,6 +5763,11 @@
       dueDate: job.dueDate || '',
       stage: 'SENT',
       attachments,
+      // Empty means anyone may take it. Set, and only that person (or the owner)
+      // can accept — enforced in the staff app, and unwritable by staff because
+      // firestore.rules leaves these keys out of the set they may touch.
+      assignedTo: assignee ? assignee.id : '',
+      assignedToName: assignee ? (assignee.name || 'Staff') : '',
       acceptedBy: null, acceptedByName: '',
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       createdBy: currentUid
@@ -5883,10 +5888,20 @@
         ${!team.tasks.length ? `<div class="lg-empty">Nothing sent yet. Open <b>Jobs</b> and press <b>send to staff</b> on a job.</div>` :
           team.tasks.slice(0,40).map(t=>{
             const stage = t.stage||'SENT';
+            const roster = team.members.filter(m=>m.active!==false);
+            // Once someone has accepted, the assignment has done its job — showing
+            // a reassign box then would just invite a confusing second owner.
+            const canReassign = stage==='SENT' && roster.length;
             return `<div class="tm-row">
               <span><b>${esc(t.title||'Job')}</b>
-                <span class="muted">${t.customerName?esc(t.customerName):''}${t.acceptedByName?' · '+esc(t.acceptedByName):''}${(t.attachments&&t.attachments.length)?' · 📎'+t.attachments.length:''}</span></span>
+                <span class="muted">${t.customerName?esc(t.customerName):''}${t.acceptedByName?' · '+esc(t.acceptedByName):''}${(t.attachments&&t.attachments.length)?' · 📎'+t.attachments.length:''}</span>
+                ${(t.assignedToName && stage==='SENT') ? `<span style="color:var(--teal);font-size:11.5px;"> · for ${esc(t.assignedToName)} only</span>` : ''}
+              </span>
               <span class="lg-row-actions">
+                ${canReassign ? `<select class="tm-assign" data-id="${esc(t.id)}" style="width:auto;font-size:11.5px;padding:3px 5px;">
+                    <option value="">anyone</option>
+                    ${roster.map(m=>`<option value="${esc(m.id)}" ${t.assignedTo===m.id?'selected':''}>${esc(m.name||'Staff')} only</option>`).join('')}
+                  </select>` : ''}
                 <span class="stamp ${stage==='READY'?'ready':(stage==='IN PRODUCTION'?'production':(stage==='ACCEPTED'?'delivered':'received'))}">${esc(stage)}</span>
                 <button class="subtle-link tm-untask" data-id="${esc(t.id)}">pull back</button>
               </span>
@@ -6028,6 +6043,19 @@
       });
     });
 
+    document.querySelectorAll('.tm-assign').forEach(sel=>{
+      sel.addEventListener('change', async ()=>{
+        const who = team.members.find(m=>m.id===sel.value);
+        try{
+          await teamShopRef().collection('tasks').doc(sel.dataset.id).update({
+            assignedTo: who ? who.id : '',
+            assignedToName: who ? (who.name||'Staff') : ''
+          });
+          toast(who ? 'Now for '+(who.name||'staff')+' only' : 'Open to anyone on the floor');
+        }catch(err){ console.error(err); toast('Could not change who it’s for'); }
+      });
+    });
+
     document.querySelectorAll('.tm-untask').forEach(b=>{
       b.addEventListener('click', async ()=>{
         if(!confirm('Pull this job back off the floor?\n\nStaff stop seeing it. The job itself stays in your ledger.')) return;
@@ -6152,7 +6180,21 @@
     }
     const existing = team.tasks.find(t=>t.jobId===job.id);
     const modal = document.getElementById('lg-modal-root');
+    const roster = team.members.filter(m=>m.active !== false);
     let files = [];
+    // Held out here, not read off the DOM at send time: paint() replaces the whole
+    // dialog whenever a picture is added or removed, and anything typed would go
+    // with it. capture() writes the fields back into these before every repaint.
+    let note = '';
+    let assignTo = '';
+
+    function capture(){
+      const n = document.getElementById('ss-note');
+      const a = document.getElementById('ss-assign');
+      if(n) note = n.value;
+      if(a) assignTo = a.value;
+    }
+    function repaint(busy){ capture(); paint(busy); }
 
     function paint(busyText){
       modal.innerHTML = `
@@ -6168,9 +6210,17 @@
             <div style="font-size:12.5px;white-space:pre-wrap;background:#f4f4f4;border-radius:4px;padding:9px 10px;line-height:1.55;max-height:150px;overflow-y:auto;">${esc(jobSpecText(job)) || '<i>no spec recorded</i>'}</div>
             <div style="font-size:11px;color:#777;margin-top:6px;">No price, no payment and no debt is sent — only the work and the pictures.</div>
 
+            <label for="ss-assign" style="display:block;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#555;margin:12px 0 4px;">Who should do it</label>
+            <select id="ss-assign" style="width:100%;padding:8px 9px;border:1px solid #bbb;border-radius:4px;font-family:var(--font-mono);font-size:12.5px;">
+              <option value="">Anyone on the floor — first to accept takes it</option>
+              ${roster.map(m=>`<option value="${esc(m.id)}" ${assignTo===m.id?'selected':''}>Only ${esc(m.name||'Staff')}</option>`).join('')}
+            </select>
+            ${!roster.length ? `<div style="font-size:11px;color:#777;margin-top:4px;">Nobody has joined the floor yet, so there's no one to assign it to.</div>` : ''}
+            ${assignTo ? `<div style="font-size:11px;color:#777;margin-top:4px;">Others will see this job, but only they can accept it.</div>` : ''}
+
             <label for="ss-note" style="display:block;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#555;margin:12px 0 4px;">Note for the operator (optional)</label>
             <textarea id="ss-note" rows="2" placeholder="e.g. matte finish, cut to size"
-              style="width:100%;padding:8px 9px;border:1px solid #bbb;border-radius:4px;font-family:var(--font-mono);font-size:12.5px;resize:vertical;"></textarea>
+              style="width:100%;padding:8px 9px;border:1px solid #bbb;border-radius:4px;font-family:var(--font-mono);font-size:12.5px;resize:vertical;">${esc(note)}</textarea>
 
             <div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#555;margin:12px 0 4px;">Pictures of the job</div>
             <button class="lg-btn ghost small" id="ss-pick" type="button">📎 Add picture</button>
@@ -6195,39 +6245,43 @@
         if(e.target.id==='ss-overlay' && !busyText) close();
       });
 
+      // Repainting on change keeps the "only they can accept it" note in step with
+      // the choice, and capture() means the note field survives it.
+      if(document.getElementById('ss-assign')){
+        document.getElementById('ss-assign').addEventListener('change', ()=> repaint());
+      }
+
       if(document.getElementById('ss-pick')){
         document.getElementById('ss-pick').addEventListener('click', ()=> document.getElementById('ss-file').click());
         document.getElementById('ss-file').addEventListener('change', e=>{
-          const note = document.getElementById('ss-note').value;
+          capture();
           Array.from(e.target.files||[]).forEach(f=>{
             if(f.size > 25*1024*1024){ toast(f.name+' is over 25MB — skipped'); return; }
             files.push(f);
           });
           e.target.value = '';
           paint();
-          document.getElementById('ss-note').value = note;
         });
         modal.querySelectorAll('.ss-drop').forEach(b=>{
           b.addEventListener('click', ()=>{
-            const note = document.getElementById('ss-note').value;
+            capture();
             files.splice(Number(b.dataset.i), 1);
             paint();
-            document.getElementById('ss-note').value = note;
           });
         });
       }
 
       document.getElementById('ss-go').addEventListener('click', async ()=>{
-        const note = document.getElementById('ss-note').value;
+        capture();
+        const who = roster.find(m=>m.id===assignTo);
         try{
-          await pushJobToStaff(job, note, files, (msg)=> paint(msg));
+          await pushJobToStaff(job, note, files, who || null, (msg)=> paint(msg));
           modal.innerHTML = '';
-          toast('Sent to the shop floor');
+          toast(who ? 'Sent to '+(who.name||'staff') : 'Sent to the shop floor');
           renderAll();
         }catch(err){
           console.error(err);
           paint();
-          document.getElementById('ss-note').value = note;
           toast(err && err.code==='card-too-big' ? 'Too many pictures for one job card — remove one and try again'
               : err && err.code==='too-big'      ? 'That file is too big to attach here'
               : 'Could not send it. Check your connection.');

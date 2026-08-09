@@ -95,6 +95,21 @@ touching status. Keep that property if you touch it.
 **Staff can never set DELIVERED** — it's tied to collecting the balance. The
 mirror only accepts `IN PRODUCTION` and `READY`.
 
+**A job can be reserved for one person** via `assignedTo` / `assignedToName`.
+Empty means anyone may take it. The enforcement is in `canAdvance` in
+`renderJobCard()` — but the *real* guarantee is that `assignedTo` is absent from
+the `hasOnly([...])` key set in `firestore.rules`, so a staff member cannot
+reassign a job to themselves however the client behaves. Reserved jobs stay
+visible to everyone (the floor should know a job is covered) and sort to the top
+of the assignee's list. The owner's reassign dropdown only appears while
+`stage === 'SENT'`; after acceptance it would just create a second apparent owner.
+
+**The send dialog repaints itself.** Adding a picture or changing the assignment
+replaces the whole modal, so anything typed is lost unless `capture()` writes the
+fields back into the closure vars first — `note` and `assignTo` live outside
+`paint()` for exactly that reason. This is the same trap as the Pending search
+losing focus; it bit once here already.
+
 **A snapshot arriving mid-typing must not repaint.** `applyStaffJobUpdates()`
 checks `document.activeElement` and skips `renderAll()` if a field is focused —
 state is already correct, the next natural render shows it. Same class of bug as

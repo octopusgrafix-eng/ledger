@@ -253,6 +253,7 @@
   /* ---------- jobs ---------- */
   .job{border-left:3px solid var(--amber);}
   .job.mine{border-left-color:var(--teal);}
+  .foryou{color:var(--teal);letter-spacing:0.3px;}
   .job.done{border-left-color:var(--green);}
   .job .hd{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}
   .job .ttl{font-family:var(--font-slab);font-size:16px;font-weight:700;line-height:1.3;}
@@ -1032,17 +1033,28 @@
   }
 
   function renderJobs(){
+    // "Mine" means work that is my responsibility — one I've accepted, or one the
+    // owner put aside for me and nobody else can take.
+    const isMine = t => t.acceptedBy === me.uid
+                     || ((t.stage||'SENT') === 'SENT' && t.assignedTo === me.uid);
     const list = tasks.filter(t=>{
       const stage = t.stage || 'SENT';
       if(jobFilter === 'open') return stage !== 'READY';
-      if(jobFilter === 'mine') return t.acceptedBy === me.uid && stage !== 'READY';
+      if(jobFilter === 'mine') return isMine(t) && stage !== 'READY';
       if(jobFilter === 'done') return stage === 'READY';
       return true;
     });
 
+    // A job with your name on it goes to the top of the list — on a busy floor
+    // it is the one thing you must not scroll past.
+    list.sort((a,b)=>{
+      const rank = t => ((t.stage||'SENT')==='SENT' && t.assignedTo===me.uid) ? 0 : 1;
+      return rank(a) - rank(b);
+    });
+
     const counts = {
       open: tasks.filter(t=>(t.stage||'SENT')!=='READY').length,
-      mine: tasks.filter(t=>t.acceptedBy===me.uid && (t.stage||'SENT')!=='READY').length,
+      mine: tasks.filter(t=>isMine(t) && (t.stage||'SENT')!=='READY').length,
       done: tasks.filter(t=>(t.stage||'SENT')==='READY').length
     };
 
@@ -1058,7 +1070,7 @@
         ${filters.map(([k,l])=>`<button class="btn ${jobFilter===k?'':'ghost'} small" data-f="${k}" type="button">${esc(l)}</button>`).join('')}
       </div>
       ${!list.length ? `<div class="empty">${
-          jobFilter==='mine' ? 'You haven’t accepted any job yet.<br>Check <b>Open</b> for work waiting to be claimed.'
+          jobFilter==='mine' ? 'Nothing is yours right now.<br>Check <b>Open</b> for work waiting to be claimed.'
         : jobFilter==='done' ? 'Nothing marked ready yet.'
         : 'No jobs have been sent to the shop floor yet.'}</div>`
       : list.map(renderJobCard).join('')}`;
@@ -1082,16 +1094,25 @@
     const mine  = t.acceptedBy === me.uid;
     const next  = NEXT_STAGE[stage];
     const atts  = Array.isArray(t.attachments) ? t.attachments : [];
+    // A job can be reserved for one person, for the ones only they do properly.
+    // Everyone still SEES it — so the floor knows it's covered — but nobody else
+    // can take it. Empty means it's open to whoever gets there first.
+    const forMe    = !!t.assignedTo && t.assignedTo === me.uid;
+    const forOther = !!t.assignedTo && t.assignedTo !== me.uid;
     // Once someone has claimed a job, only they (or the owner) move it along —
     // otherwise two people quietly work the same ticket.
-    const canAdvance = next && (stage === 'SENT' || mine || myRole === 'owner');
+    const canAdvance = next
+      && (stage === 'SENT' ? (!forOther || myRole === 'owner')
+                           : (mine || myRole === 'owner'));
 
-    return `<div class="card job ${stage==='READY'?'done':(mine?'mine':'')}">
+    return `<div class="card job ${stage==='READY'?'done':((mine||forMe)?'mine':'')}">
       <div class="hd">
         <div style="min-width:0;">
           <div class="ttl">${esc(t.title || 'Job')}</div>
           <div class="meta">
             ${t.customerName ? esc(t.customerName)+' · ' : ''}${dueBadge(t.dueDate)}
+            ${(forMe && stage==='SENT') ? '<br><b class="foryou">★ Put aside for you</b>' : ''}
+            ${(forOther && stage==='SENT') ? `<br>Kept for <b>${esc(t.assignedToName||'someone else')}</b>` : ''}
             ${t.acceptedByName ? `<br>Taken by <b>${esc(t.acceptedByName)}</b>${mine?' (you)':''}` : ''}
           </div>
         </div>
@@ -1110,7 +1131,11 @@
       ${t.staffNote ? `<div class="meta" style="margin-top:8px;">Note: ${esc(t.staffNote)}</div>` : ''}
       <div class="acts">
         ${canAdvance ? `<button class="btn ${stage==='SENT'?'go':''} small" data-advance="${esc(t.id)}" type="button">${esc(NEXT_LABEL[stage])}</button>` : ''}
-        ${(!canAdvance && next) ? `<span class="muted" style="font-size:11.5px;">${esc(t.acceptedByName||'Someone else')} is on this one.</span>` : ''}
+        ${(!canAdvance && next) ? `<span class="muted" style="font-size:11.5px;">${
+            (stage==='SENT' && forOther)
+              ? esc(t.assignedToName||'Someone else')+' has to do this one.'
+              : esc(t.acceptedByName||'Someone else')+' is on this one.'
+          }</span>` : ''}
         ${stage==='READY' ? '<span class="muted" style="font-size:11.5px;">Ready — the owner closes it off in the ledger.</span>' : ''}
       </div>
     </div>`;

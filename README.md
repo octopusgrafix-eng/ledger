@@ -113,6 +113,20 @@ Staff can never mark a job DELIVERED — that is tied to collecting the balance,
 so it stays with the owner. Firestore rules pin exactly which fields a staff
 account may write on a job card; everything else is rejected server-side.
 
+### Reserving a job for one person
+
+When you send a job you choose **who should do it** — *Anyone on the floor*, or
+one named person, for the work only they do properly.
+
+A reserved job is still **visible** to everyone, so the floor knows it's covered,
+but only that person can accept it. It sorts to the top of their list marked
+*★ Put aside for you*; everyone else sees *Kept for Tunde* and no Accept button.
+
+You can change your mind from the Team tab — each job still waiting to be
+accepted has a dropdown next to it. Once someone has accepted, the assignment
+has done its job and the dropdown goes away. Staff cannot reassign a job to
+themselves: `assignedTo` isn't in the set of fields the rules let them write.
+
 ### Job updates flow back into the ledger
 
 When a staff member moves a job, the ledger applies it to the matching job:
