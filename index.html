@@ -288,6 +288,19 @@
   /* As a KPI headline the figure is 22px, not a 13px table cell — inherit the size it
      sits in so it still reads as the big number, keeping only the dotted "tappable" edge. */
   .lg-kpi .num .owed-pay{font-size:inherit;font-weight:inherit;padding:0;}
+  /* "This figure opens up." Same dotted-underline language as .owed-pay, but it borrows the
+     colour of whatever it sits in rather than forcing clay — these figures aren't all debt,
+     and clay means debt everywhere else. */
+  .kpi-drill{
+    background:none;border:none;padding:0;cursor:pointer;
+    font:inherit;color:inherit;
+    border-bottom:1.5px dotted currentColor;
+    transition:opacity 140ms ease, transform 120ms var(--ease-out);
+  }
+  .kpi-drill:active{transform:scale(0.96);}
+  .kpi-drill:hover,.kpi-drill:focus-visible{border-bottom-style:solid;opacity:.75;}
+  .lg-kpi.debt .num .kpi-drill{color:var(--clay);}
+  @media (prefers-reduced-motion: reduce){ .kpi-drill:active{transform:none;} }
   .owed-pay{transition:background-color 140ms ease, transform 120ms var(--ease-out);}
   .owed-pay:active{transform:scale(0.96);}
   .owed-pay:hover,.owed-pay:focus-visible{background:rgba(171,69,48,.1);border-bottom-style:solid;}
@@ -2381,7 +2394,9 @@
 
   // ---------- DAILY VIEW (full income & jobs for one day) ----------
   let dayViewDate = todayISO();
-  let dayDebtOpen = false;   // New Debt KPI expanded to show which jobs make up the figure
+  // Which figure on Daily View is currently opened up. One at a time: two panels open at
+  // once pushes the day's numbers off the screen, which is the thing you came to look at.
+  let dayOpenCard = null;
   function shiftDate(iso, delta){
     const d = new Date(iso+'T00:00:00'); d.setDate(d.getDate()+delta); return isoOf(d);
   }
@@ -2424,6 +2439,211 @@
     const netCash = paid - expenseTotal - matCost;
     return {jobsToday, billed, newDebt, cp, matCost, matCostUsed, matWasteCost, paid, jobIncome, oldDebtPaid, paymentsToday, expensesToday, expenseTotal, netProfit, tithe, pf, ex, netCash};
   }
+  // Every figure on the day sheet can be opened to show what it's made of. The affordance is
+  // the dotted underline already used by `.owed-pay` — a number you can press. `key` names
+  // the panel; a card with nothing behind it (a zero) stays plain text, because opening an
+  // empty list teaches nothing.
+  function drill(key, amount, hasDetail){
+    if(!hasDetail) return naira(amount);
+    return `<button class="kpi-drill dv-drill" data-key="${key}" title="See how this figure is made up">${naira(amount)}</button>`;
+  }
+  // Panels are grouped by the row they sit under, so an opened panel appears directly
+  // beneath the figure it explains rather than at the bottom of the page.
+  const DAY_PANEL_ROWS = {
+    one:   ['billed','income','olddebt','grand'],
+    two:   ['newdebt','cp','matbought','matused','matwasted'],
+    three: ['expenses','netprofit','netcash'],
+  };
+  function dayPanelFor(row, d){
+    if(!dayOpenCard || DAY_PANEL_ROWS[row].indexOf(dayOpenCard) === -1) return '';
+    return renderDayBreakdown(dayOpenCard, d);
+  }
+  function dayPanel(title, bodyHTML, accent){
+    return `<div class="lg-card" style="border-left:3px solid ${accent||'var(--ok-blue)'};">
+      <div class="lg-card-title">${title}</div>
+      ${bodyHTML}
+    </div>`;
+  }
+  function dayTable(headers, rows, totalRow){
+    if(!rows.length) return '<div class="lg-empty">Nothing recorded for this on the day.</div>';
+    return `<div style="overflow-x:auto;"><table><thead><tr>${
+      headers.map(h=>`<th${h.num?' class="num-col"':''}>${h.label}</th>`).join('')
+    }</tr></thead><tbody>
+      ${rows.join('')}
+      ${totalRow||''}
+    </tbody></table></div>`;
+  }
+
+  function renderDayBreakdown(key, d){
+    const day = fmtDate(dayViewDate);
+    const money = (v,cls)=>`<td class="num-col${cls?' '+cls:''}">${naira(v)}</td>`;
+    const jobLabel = j => esc(j.description || (j.items && j.items[0] ? j.items[0].service : '—'));
+
+    if(key === 'billed'){
+      const rows = d.jobsToday.map(j=>({j, t:jobTotals(j)})).sort((a,b)=>b.t.totalBilled-a.t.totalBilled);
+      return dayPanel(`What made up the ${naira(d.billed)} billed — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           Every job taken in on this day, at what it was billed. Discounts are already taken off.
+           This is work booked, not money received — the paid column shows how much of it has come in.
+         </div>` +
+        dayTable([{label:'Customer'},{label:'Job'},{label:'Billed',num:1},{label:'Paid',num:1},{label:'Still owed',num:1}],
+          rows.map(x=>`<tr>
+            <td>${esc(x.j.customerName)||'—'}</td><td>${jobLabel(x.j)}</td>
+            ${money(x.t.totalBilled)}${money(x.t.totalPaid)}
+            <td class="num-col ${x.t.debt>0?'flag':'muted'}">${naira(x.t.debt)}</td>
+          </tr>`),
+          `<tr style="font-weight:700;border-top:2px solid var(--ink);">
+            <td colspan="2">TOTAL BILLED</td>${money(d.billed)}${money(d.jobsToday.reduce((s,j)=>s+jobTotals(j).totalPaid,0))}
+            <td class="num-col flag">${naira(d.newDebt)}</td>
+          </tr>`), 'var(--amber)');
+    }
+
+    if(key === 'income' || key === 'olddebt' || key === 'grand'){
+      const all = d.paymentsToday.slice().sort((a,b)=>b.amount-a.amount);
+      const list = key==='income' ? all.filter(x=>!x.isOldDebt)
+                 : key==='olddebt' ? all.filter(x=>x.isOldDebt)
+                 : all;
+      const total = key==='income' ? d.jobIncome : key==='olddebt' ? d.oldDebtPaid : d.paid;
+      const titles = {income:'job payments', olddebt:'old-debt payments', grand:'money collected'};
+      const cash = list.reduce((s,x)=>s+(Number(x.payment.cash)||0),0);
+      const bank = list.reduce((s,x)=>s+(Number(x.payment.bank)||0),0);
+      return dayPanel(`What made up the ${naira(total)} in ${titles[key]} — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           ${key==='grand'
+             ? `Everything that came in: ${naira(d.jobIncome)} against jobs and ${naira(d.oldDebtPaid)} against old debt.`
+             : key==='olddebt'
+               ? 'Money paid down against debt carried from before the job was logged here.'
+               : 'Payments against jobs — including jobs taken in on earlier days, because this is the day the cash actually arrived.'}
+           Cash ${naira(cash)} · transfer ${naira(bank)}.
+         </div>` +
+        dayTable([{label:'Customer'},{label:'Against'},{label:'Job date'},{label:'Cash',num:1},{label:'Transfer',num:1},{label:'Amount',num:1}],
+          list.map(x=>`<tr>
+            <td>${esc(x.job.customerName)||'—'}</td>
+            <td class="muted">${x.isOldDebt?'<span class="stamp" style="background:var(--teal);color:#fff;">OLD DEBT</span>':jobLabel(x.job)}</td>
+            <td>${x.isOldDebt?'—':fmtDate(x.job.dateReceived)}</td>
+            ${money(Number(x.payment.cash)||0)}${money(Number(x.payment.bank)||0)}${money(x.amount)}
+          </tr>`),
+          `<tr style="font-weight:700;border-top:2px solid var(--ink);">
+            <td colspan="3">TOTAL</td>${money(cash)}${money(bank)}${money(total)}
+          </tr>`), key==='olddebt'?'var(--teal)':'var(--green)');
+    }
+
+    if(key === 'newdebt') return renderDayDebtBreakdown(d);
+
+    if(key === 'cp'){
+      const rows = d.jobsToday.map(j=>({j, cp:Number(j.cp)||0})).filter(x=>x.cp>0).sort((a,b)=>b.cp-a.cp);
+      const untold = d.jobsToday.filter(j=>!(Number(j.cp)||0)).length;
+      return dayPanel(`What made up the ${naira(d.cp)} cost of production — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           What each job cost you to produce, as entered on the job. This is the figure that funds the
+           <a href="#" class="goto-cp-account" data-date="${dayViewDate}" style="color:var(--teal);">CP Account purse</a>,
+           and it comes straight out of Net Profit.
+           ${untold?`<b>${untold} job${untold===1?'':'s'}</b> on this day ${untold===1?'has':'have'} no cost recorded yet — add it on the job to make this figure honest.`:''}
+         </div>` +
+        dayTable([{label:'Customer'},{label:'Job'},{label:'Cost of production',num:1}],
+          rows.map(x=>`<tr><td>${esc(x.j.customerName)||'—'}</td><td>${jobLabel(x.j)}</td>${money(x.cp)}</tr>`),
+          `<tr style="font-weight:700;border-top:2px solid var(--ink);"><td colspan="2">TOTAL</td>${money(d.cp)}</tr>`),
+        'var(--teal)');
+    }
+
+    if(key === 'matbought'){
+      const buys = allStockPurchases().filter(p=>p.date===dayViewDate);
+      return dayPanel(`What made up the ${naira(d.matCost)} of stock bought — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           Stock you paid for on this day. It reduces Net Cash but <b>never Net Profit</b> — restocking is
+           funded by the <a href="#" class="goto-purchase-log" style="color:var(--teal);">material purse</a>,
+           which collects what jobs are charged for material.
+         </div>` +
+        dayTable([{label:'Material'},{label:'Qty',num:1},{label:'Unit cost',num:1},{label:'Total',num:1}],
+          buys.map(p=>`<tr><td>${esc(p.materialName)}</td>
+            <td class="num-col">${p.qty} ${esc(p.unit)||''}</td>${money(p.unitCost)}${money(p.qty*p.unitCost)}</tr>`),
+          `<tr style="font-weight:700;border-top:2px solid var(--ink);"><td colspan="3">TOTAL</td>${money(d.matCost)}</tr>`),
+        'var(--teal)');
+    }
+
+    if(key === 'matused' || key === 'matwasted'){
+      const wasted = key === 'matwasted';
+      const rows = [];
+      d.jobsToday.forEach(j=>{
+        jobMaterialsList(j).forEach(m=>{
+          const qty = wasted ? (Number(m.waste)||0) : (Number(m.qty)||0);
+          if(qty <= 0) return;
+          rows.push({job:j, name:m.name, qty, unitCost:Number(m.unitCost)||0, cost:qty*(Number(m.unitCost)||0)});
+        });
+      });
+      rows.sort((a,b)=>b.cost-a.cost);
+      const total = wasted ? d.matWasteCost : d.matCostUsed;
+      return dayPanel(`What made up the ${naira(total)} of material ${wasted?'wasted':'used'} — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           ${wasted
+             ? 'Material spoiled on this day’s jobs, valued at today’s price. It comes out of Net Profit exactly like material used, so it also shrinks the Tithe/PF/EX split.'
+             : 'Material consumed by this day’s jobs, valued at today’s price. It comes out of Net Profit and is charged into the material purse, which is what pays for restocking.'}
+         </div>` +
+        dayTable([{label:'Customer'},{label:'Job'},{label:'Material'},{label:wasted?'Wasted':'Used',num:1},{label:'Unit cost',num:1},{label:'Cost',num:1}],
+          rows.map(r=>`<tr>
+            <td>${esc(r.job.customerName)||'—'}</td><td>${jobLabel(r.job)}</td><td>${esc(r.name)}</td>
+            <td class="num-col">${r.qty}</td>${money(r.unitCost)}
+            <td class="num-col ${wasted?'flag':''}">${naira(r.cost)}</td>
+          </tr>`),
+          `<tr style="font-weight:700;border-top:2px solid var(--ink);"><td colspan="5">TOTAL</td>
+            <td class="num-col ${wasted?'flag':''}">${naira(total)}</td></tr>`),
+        wasted?'var(--clay)':'var(--teal)');
+    }
+
+    if(key === 'expenses'){
+      const rows = d.expensesToday.slice().sort((a,b)=>(Number(b.amount)||0)-(Number(a.amount)||0));
+      return dayPanel(`What made up the ${naira(d.expenseTotal)} in expenses — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           Running costs logged on this day. Expenses reduce Net Cash but are <b>not</b> part of Net Profit —
+           the split is taken off profit before expenses come out.
+         </div>` +
+        dayTable([{label:'Category'},{label:'Note'},{label:'Amount',num:1}],
+          rows.map(e=>`<tr><td>${esc(e.category)||'—'}</td><td class="muted">${esc(e.note)||'—'}</td>${money(e.amount)}</tr>`),
+          `<tr style="font-weight:700;border-top:2px solid var(--ink);"><td colspan="2">TOTAL</td>${money(d.expenseTotal)}</tr>`),
+        'var(--amber)');
+    }
+
+    // The last two aren't lists of things — they're arithmetic. Showing the sum as a
+    // statement is the honest breakdown: every line is a figure you can open elsewhere.
+    if(key === 'netprofit' || key === 'netcash'){
+      const profit = key === 'netprofit';
+      const lines = profit
+        ? [['Money collected today', d.paid, '+', 'grand'],
+           ['Cost of production', -d.cp, '−', 'cp'],
+           ['Material used', -d.matCostUsed, '−', 'matused'],
+           ['Material wasted', -d.matWasteCost, '−', 'matwasted']]
+        : [['Money collected today', d.paid, '+', 'grand'],
+           ['Expenses', -d.expenseTotal, '−', 'expenses'],
+           ['Stock bought', -d.matCost, '−', 'matbought']];
+      const raw = lines.reduce((s,l)=>s+l[1], 0);
+      const shown = profit ? d.netProfit : d.netCash;
+      return dayPanel(`How the ${naira(shown)} ${profit?'net profit':'net cash'} was worked out — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           ${profit
+             ? 'What the day actually earned. Buying stock is not in this — restocking is paid out of the material purse, not out of profit. Tithe/PF/EX are taken off this figure.'
+             : 'How much more cash you hold than you started with. This is money movement, not earnings — buying stock takes cash out without being a loss.'}
+         </div>
+         <div style="overflow-x:auto;"><table><tbody>
+         ${lines.map(l=>`<tr>
+           <td style="width:26px;color:var(--muted);">${l[2]}</td>
+           <td>${l[3] ? `<button class="subtle-link dv-drill" data-key="${l[3]}">${l[0]}</button>` : l[0]}</td>
+           <td class="num-col ${l[1]<0?'flag':''}">${naira(Math.abs(l[1]))}</td>
+         </tr>`).join('')}
+         <tr style="font-weight:700;border-top:2px solid var(--ink);">
+           <td></td><td>${profit?'NET PROFIT':'NET CASH'}</td>
+           <td class="num-col ${shown<0?'flag':''}">${naira(shown)}</td>
+         </tr>
+         ${profit && raw < 0 ? `<tr><td></td><td colspan="2" class="muted" style="font-size:11px;">
+           The parts come to ${naira(raw)}. Net Profit never shows below zero, so a loss reads as ${naira(0)} here
+           and nothing is split off it.</td></tr>` : ''}
+         </tbody></table></div>
+         ${profit ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;">
+           Split off this: tithe ${naira(d.tithe)} · PF ${naira(d.pf)} · EX ${naira(d.ex)}.</div>` : ''}`,
+        profit?'var(--green)':'var(--ok-blue)');
+    }
+    return '';
+  }
+
   // Where the day's New Debt figure came from, job by job. The debt is carried by the
   // customer on each job rather than being a figure of its own, so this rebuilds the total
   // the same way dayStats() does — same jobs, same jobTotals() — and shows the parts.
@@ -2484,30 +2704,33 @@
         </div>
       </div>
 
-      <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi"><div class="num">${naira(d.billed)}</div><div class="lbl">Billed</div></div>
-        <div class="lg-card lg-kpi paid"><div class="num">${naira(d.jobIncome)}</div><div class="lbl">Income for Today</div></div>
-        <div class="lg-card lg-kpi ${d.oldDebtPaid>0?'teal':''}"><div class="num">${naira(d.oldDebtPaid)}</div><div class="lbl">Total Old Debt</div></div>
-        <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(d.paid)}</div><div class="lbl">Grand Total</div></div>
+      <div style="font-size:11px;color:var(--muted);margin:-4px 0 8px;">
+        Any underlined figure below opens to show exactly what it's made of.
       </div>
+      <div class="lg-grid cols-4">
+        <div class="lg-card lg-kpi"><div class="num">${drill('billed', d.billed, d.jobsToday.length>0)}</div><div class="lbl">Billed</div></div>
+        <div class="lg-card lg-kpi paid"><div class="num">${drill('income', d.jobIncome, d.paymentsToday.some(x=>!x.isOldDebt))}</div><div class="lbl">Income for Today</div></div>
+        <div class="lg-card lg-kpi ${d.oldDebtPaid>0?'teal':''}"><div class="num">${drill('olddebt', d.oldDebtPaid, d.paymentsToday.some(x=>x.isOldDebt))}</div><div class="lbl">Total Old Debt</div></div>
+        <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${drill('grand', d.paid, d.paymentsToday.length>0)}</div><div class="lbl">Grand Total</div></div>
+      </div>
+      ${dayPanelFor('one', d)}
       <div class="lg-grid cols-4">
         <div class="lg-card lg-kpi debt">
-          <div class="num">${d.newDebt>0
-            ? `<button class="owed-pay dv-debt-toggle" title="See who this is owed by">${naira(d.newDebt)}</button>`
-            : naira(d.newDebt)}</div>
-          <div class="lbl">New Debt${d.newDebt>0?` · <span class="muted" style="text-transform:none;letter-spacing:0;">${dayDebtOpen?'hide':'who owes it'}</span>`:''}</div>
+          <div class="num">${drill('newdebt', d.newDebt, d.newDebt>0)}</div>
+          <div class="lbl">New Debt</div>
         </div>
-        <div class="lg-card"><div class="lg-card-title">Cost of Production</div><div style="font-size:18px;font-weight:600">${naira(d.cp)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-cp-account" data-date="${dayViewDate}" style="color:var(--teal);">CP Account \u2192</a></div></div>
-        <div class="lg-card"><div class="lg-card-title">Material Cost — Bought Today</div><div style="font-size:18px;font-weight:600">${naira(d.matCost)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-purchase-log" style="color:var(--teal);">Purchase Log \u2192</a></div></div>
-        <div class="lg-card"><div class="lg-card-title">Material Cost — Used Today</div><div style="font-size:18px;font-weight:600">${naira(d.matCostUsed)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">at today's material price</div></div>
-        <div class="lg-card"><div class="lg-card-title">Material Cost — Wasted Today</div><div style="font-size:18px;font-weight:600;${d.matWasteCost>0?'color:var(--clay);':''}">${naira(d.matWasteCost)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">spoiled/wasted material</div></div>
+        <div class="lg-card"><div class="lg-card-title">Cost of Production</div><div style="font-size:18px;font-weight:600">${drill('cp', d.cp, d.cp>0)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-cp-account" data-date="${dayViewDate}" style="color:var(--teal);">CP Account \u2192</a></div></div>
+        <div class="lg-card"><div class="lg-card-title">Material Cost — Bought Today</div><div style="font-size:18px;font-weight:600">${drill('matbought', d.matCost, d.matCost>0)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-purchase-log" style="color:var(--teal);">Purchase Log \u2192</a></div></div>
+        <div class="lg-card"><div class="lg-card-title">Material Cost — Used Today</div><div style="font-size:18px;font-weight:600">${drill('matused', d.matCostUsed, d.matCostUsed>0)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">at today's material price</div></div>
+        <div class="lg-card"><div class="lg-card-title">Material Cost — Wasted Today</div><div style="font-size:18px;font-weight:600;${d.matWasteCost>0?'color:var(--clay);':''}">${drill('matwasted', d.matWasteCost, d.matWasteCost>0)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">spoiled/wasted material</div></div>
       </div>
-      ${dayDebtOpen && d.newDebt>0 ? renderDayDebtBreakdown(d) : ''}
+      ${dayPanelFor('two', d)}
       <div class="lg-grid cols-4">
-        <div class="lg-card"><div class="lg-card-title">Expenses</div><div style="font-size:18px;font-weight:600">${naira(d.expenseTotal)}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Net Profit</div><div style="font-size:18px;font-weight:600">${naira(d.netProfit)}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Net Cash (after expenses &amp; stock buys)</div><div style="font-size:18px;font-weight:600">${naira(d.netCash)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(d.paid)} in − ${naira(d.expenseTotal)} expenses − ${naira(d.matCost)} stock bought</div></div>
+        <div class="lg-card"><div class="lg-card-title">Expenses</div><div style="font-size:18px;font-weight:600">${drill('expenses', d.expenseTotal, d.expensesToday.length>0)}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Net Profit</div><div style="font-size:18px;font-weight:600">${drill('netprofit', d.netProfit, true)}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Net Cash (after expenses &amp; stock buys)</div><div style="font-size:18px;font-weight:600">${drill('netcash', d.netCash, true)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(d.paid)} in − ${naira(d.expenseTotal)} expenses − ${naira(d.matCost)} stock bought</div></div>
       </div>
+      ${dayPanelFor('three', d)}
       <div class="lg-card">
         <div class="lg-card-title">Split \u2014 Tithe (${state.settings.tithePct}%) / PF (${state.settings.pfPct}%) / EX (${state.settings.exPct}%)</div>
         <div style="font-size:16px;font-weight:600;">${naira(d.tithe)} &nbsp;/&nbsp; ${naira(d.pf)} &nbsp;/&nbsp; ${naira(d.ex)}</div>
@@ -2553,8 +2776,15 @@
     document.getElementById('dv-prev').addEventListener('click', ()=>{ dayViewDate = shiftDate(dayViewDate,-1); renderDayView(); });
     document.getElementById('dv-next').addEventListener('click', ()=>{ dayViewDate = shiftDate(dayViewDate,1); renderDayView(); });
     document.getElementById('dv-today').addEventListener('click', ()=>{ dayViewDate = todayISO(); renderDayView(); });
-    const debtToggle = document.querySelector('.dv-debt-toggle');
-    if(debtToggle) debtToggle.addEventListener('click', ()=>{ dayDebtOpen = !dayDebtOpen; renderDayView(); });
+    // Pressing the open figure again closes it; pressing a different one swaps. The links
+    // inside the Net Profit / Net Cash statements use the same class, so they jump straight
+    // to the panel for whichever line you tapped.
+    document.querySelectorAll('.dv-drill').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        dayOpenCard = (dayOpenCard === b.dataset.key) ? null : b.dataset.key;
+        renderDayView();
+      });
+    });
     attachStatusHandlers(renderDayView);
     attachDeleteHandlers(renderDayView);
     attachPaymentHandlers(renderDayView);
