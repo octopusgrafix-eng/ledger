@@ -258,6 +258,18 @@
   .job .hd{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}
   .job .ttl{font-family:var(--font-slab);font-size:16px;font-weight:700;line-height:1.3;}
   .job .meta{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6;}
+  /* The order line by line. A ticked line stays visible, struck through — the floor needs to
+     see the whole job, not just what's left to do. */
+  .wl{display:flex;flex-direction:column;gap:2px;margin-top:9px;
+    border-top:1px dashed var(--rule);padding-top:8px;}
+  .wl-head{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+  .wl-head .wl-all{color:var(--green);}
+  .wl-lock{display:block;text-transform:none;letter-spacing:0;font-size:10.5px;margin-top:2px;}
+  .wl-item{display:flex;align-items:flex-start;gap:8px;font-size:13.5px;line-height:1.5;cursor:pointer;}
+  .wl-item input{width:auto;margin:3px 0 0;flex:0 0 auto;width:17px;height:17px;
+    accent-color:var(--green);cursor:pointer;}
+  .wl-item input:disabled{cursor:default;opacity:.5;}
+  .wl-item.is-done > span{text-decoration:line-through;color:var(--muted);}
   .job .spec{font-size:13px;line-height:1.6;white-space:pre-wrap;margin-top:9px;
     border-top:1px dotted var(--rule);padding-top:9px;word-break:break-word;}
   .job .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px;}
@@ -1081,12 +1093,37 @@
     $('jobs-scroll').querySelectorAll('[data-advance]').forEach(b=>{
       b.addEventListener('click', ()=> advanceJob(b.dataset.advance, b));
     });
+    $('jobs-scroll').querySelectorAll('[data-tick]').forEach(box=>{
+      box.addEventListener('change', ()=> tickJobItem(box.dataset.tick, Number(box.dataset.i), box));
+    });
     $('jobs-scroll').querySelectorAll('.att img[data-full]').forEach(img=>{
       img.addEventListener('click', (e)=>{
         e.preventDefault();
         openLightbox(img.dataset.full, img.dataset.nm);
       });
     });
+  }
+
+  // The order, line by line, so a docket with five pieces of work can be worked and reported
+  // one piece at a time. Ticking is allowed to anyone in the shop once the job has been
+  // taken — before that it isn't yet anybody's job to be doing.
+  function renderJobChecklist(t){
+    const list = Array.isArray(t.checklist) ? t.checklist : [];
+    if(list.length < 1) return '';
+    const stage = t.stage || 'SENT';
+    const mine  = t.acceptedBy === me.uid;
+    const canTick = stage !== 'SENT' && (mine || myRole === 'owner');
+    const done = list.filter(c=>c && c.d).length;
+    return `<div class="wl">
+      <div class="wl-head">
+        Work on this job · <b class="${done===list.length?'wl-all':''}">${done} of ${list.length} done</b>
+        ${canTick ? '' : `<span class="wl-lock">${stage==='SENT'?'take the job to start ticking':'only the person on this job can tick'}</span>`}
+      </div>
+      ${list.map((c,i)=>`<label class="wl-item${c && c.d?' is-done':''}">
+        <input type="checkbox" data-tick="${esc(t.id)}" data-i="${i}" ${c && c.d?'checked':''} ${canTick?'':'disabled'}>
+        <span>${esc(c && c.t || 'Item')}</span>
+      </label>`).join('')}
+    </div>`;
   }
 
   function renderJobCard(t){
@@ -1119,6 +1156,7 @@
         <span class="stamp ${STAGE_CLASS[stage]||'sent'}">${esc(stage)}</span>
       </div>
       ${t.spec ? `<div class="spec">${esc(t.spec)}</div>` : ''}
+      ${renderJobChecklist(t)}
       ${atts.length ? `<div class="atts">${atts.map(a=>
           isImage(a)
             ? `<a class="att" href="${esc(a.url)}" download="${esc(a.name||'')}">
@@ -1139,6 +1177,38 @@
         ${stage==='READY' ? '<span class="muted" style="font-size:11.5px;">Ready — the owner closes it off in the ledger.</span>' : ''}
       </div>
     </div>`;
+  }
+
+  // Ticking one line off. Writes the whole `checklist` array plus a bumped `staffUpdate.rev`,
+  // so the ledger applies it exactly once. `stage` is carried unchanged — the ledger keys on
+  // staffUpdate.stage and would otherwise read the tick as a stage change and move the job.
+  async function tickJobItem(id, i, box){
+    const t = tasks.find(x=>x.id===id);
+    if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
+    const wanted = box.checked;
+    box.disabled = true;
+    const checklist = t.checklist.map((c,n)=> n===i ? {t:(c&&c.t)||'', d:wanted} : {t:(c&&c.t)||'', d:!!(c&&c.d)});
+    try{
+      await shopRef().collection('tasks').doc(id).update({
+        checklist,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        staffUpdate: {
+          stage: t.stage || 'SENT',
+          by: me.uid,
+          byName: myName,
+          rev: (t.staffUpdate && Number(t.staffUpdate.rev) || 0) + 1,
+          at: new Date().toISOString()
+        }
+      });
+      const done = checklist.filter(c=>c.d).length;
+      toast(done===checklist.length ? 'All work on this job ticked off.' : done+' of '+checklist.length+' done.');
+    }catch(err){
+      console.error('tick failed', err);
+      box.checked = !wanted;   // put it back — the write did not land
+      toast('Could not save that tick. Check your connection.');
+    }finally{
+      box.disabled = false;
+    }
   }
 
   async function advanceJob(id, btn){

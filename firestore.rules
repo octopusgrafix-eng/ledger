@@ -118,7 +118,11 @@ service cloud.firestore {
                       || (isMember()
                           && request.resource.data.diff(resource.data).affectedKeys()
                                .hasOnly(['stage','acceptedBy','acceptedByName','acceptedAt',
-                                         'staffUpdate','staffNote','doneAt','updatedAt']));
+                                         'staffUpdate','staffNote','doneAt','updatedAt',
+                                         // Ticking off the lines of work on a job. Labels are
+                                         // set by the owner when the card is sent; staff only
+                                         // ever flip the done flags.
+                                         'checklist']));
       }
 
       match /shifts/{shiftId} {

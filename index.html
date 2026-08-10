@@ -291,6 +291,17 @@
   /* "This figure opens up." Same dotted-underline language as .owed-pay, but it borrows the
      colour of whatever it sits in rather than forcing clay — these figures aren't all debt,
      and clay means debt everywhere else. */
+  /* The work on a docket, as a tickable list. A ticked line is struck through and faded
+     rather than removed — the floor needs to see the whole order, not just what's left. */
+  .wl{display:flex;flex-direction:column;gap:1px;min-width:150px;}
+  .wl-head{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:3px;}
+  .wl-head .wl-all{color:var(--green);}
+  .wl-item{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.45;
+    margin:0;cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink);}
+  .wl-item input{width:auto;margin:2px 0 0;flex:0 0 auto;accent-color:var(--green);cursor:pointer;}
+  .wl-item input:disabled{cursor:default;}
+  .wl-item.is-done > span{text-decoration:line-through;color:var(--muted);}
+  .wl-item > span{transition:color 160ms ease;}
   .kpi-drill{
     background:none;border:none;padding:0;cursor:pointer;
     font:inherit;color:inherit;
@@ -1575,6 +1586,60 @@
     return {rawTotal, discount, totalBilled, totalPaid, debt, credit, cp, materialUsedCost, materialWasteCost, profit};
   }
 
+  // ---------- the work on a docket, as a tickable list ----------
+  //
+  // One job often carries several pieces of work — 100 stickers AND two banners — and the
+  // floor finishes them one at a time. So progress belongs to the line, not just the job:
+  // "READY" on a docket with five items tells you nothing about which four are done.
+  //
+  // The labels are derived from the job's items, never stored, so editing a job's items
+  // reshapes the list. The ticks ARE stored, on `j.checklist`, and are re-matched to the
+  // derived labels by text — so correcting a price or adding a sixth item doesn't wipe the
+  // five ticks already made. Labels deliberately carry no money.
+  function jobChecklistLines(j){
+    const lines = [];
+    (j.items||[]).forEach(it=>{
+      const qty = Number(it.qty)||0;
+      const dq  = Number(it.descQty)||0;
+      // A desc with its own quantity is a separate piece of work; a desc without one is a
+      // note on this line, so it rides along rather than becoming a line of its own. Same
+      // rule as jobSpecText(), so the ledger and the shop floor read identically.
+      if(qty > 0) lines.push(`${it.service||'Item'} ×${qty}${it.unit?' '+it.unit:''}${(it.desc && dq<=0)?' — '+it.desc:''}`);
+      if(dq > 0) lines.push(`${it.desc||'Custom'} ×${dq}${it.descUnit?' '+it.descUnit:''}`);
+      else if(it.desc && qty <= 0) lines.push(it.desc);
+    });
+    if(!lines.length) lines.push(j.description || 'Job');
+    return lines;
+  }
+  // Matches are consumed as they're found, so two identical labels keep two separate ticks
+  // instead of both reading the first one.
+  function jobChecklist(j){
+    const pool = (Array.isArray(j.checklist) ? j.checklist : []).slice();
+    return jobChecklistLines(j).map(t=>{
+      const i = pool.findIndex(c=>c && c.t === t);
+      const was = i >= 0 ? pool.splice(i,1)[0] : null;
+      return {t, d: was ? !!was.d : false};
+    });
+  }
+  function jobChecklistProgress(j){
+    const list = jobChecklist(j);
+    return {list, done: list.filter(c=>c.d).length, total: list.length};
+  }
+  // The description cell everywhere jobs are tabled. A single-item job stays a single line —
+  // a checkbox and nothing else — so the common case doesn't grow a header it doesn't need.
+  function jobChecklistHTML(j, editable){
+    const {list, done, total} = jobChecklistProgress(j);
+    const multi = total > 1;
+    const head = multi
+      ? `<div class="wl-head">${j.description?esc(j.description)+' · ':''}<b class="${done===total?'wl-all':''}">${done} of ${total} done</b></div>`
+      : '';
+    return `<div class="wl">${head}${list.map((c,i)=>`
+      <label class="wl-item${c.d?' is-done':''}">
+        <input type="checkbox" class="job-item-check" data-id="${j.id}" data-i="${i}" ${c.d?'checked':''} ${editable?'':'disabled'}>
+        <span>${esc(c.t)}</span>
+      </label>`).join('')}</div>`;
+  }
+
   // ---------- due dates ----------
   // A job's promised date. Once it's DELIVERED nothing is overdue any more — the work is out
   // the door, whatever the date says.
@@ -1911,40 +1976,119 @@
   function materialPurchaseCostOnDate(dateStr){
     return allStockPurchases().filter(p=>p.date===dateStr).reduce((s,p)=>s+p.qty*p.unitCost, 0);
   }
-  function materialPurchaseCostInRange(fromDate, toDate){
-    return allStockPurchases().filter(p=>p.date>=fromDate && p.date<=toDate).reduce((s,p)=>s+p.qty*p.unitCost, 0);
+  // ---------- one month, bucketed by day: the single source of the daily figures ----------
+  //
+  // The Dashboard, the Summary day table and the monthly/daily target cards all report the
+  // same Net Profit, and each used to build its own buckets. They drifted: the Dashboard was
+  // keying payments to the day the JOB was taken in, so a July job paid in August landed in
+  // July there and in August everywhere else, and it summed unclamped so a loss-making day
+  // netted off a good one. Everything now reads these buckets instead.
+  //
+  // The rules, stated once:
+  //   billed / newDebt / cp / matUsed / matWaste  → the day the JOB was taken in
+  //   paid  (job payments + old-debt payments)    → the day the MONEY actually came in
+  //   matBought / expenses                        → the day the cash left the till
+  //   net = max(paid − cp − matUsed − matWaste, 0), clamped PER DAY, because that is the
+  //         figure Tithe/PF/EX are split from and a day never splits a negative.
+  //
+  // `days` is a null-prototype map, so an undefined or hostile date key can't match.
+  function monthDailyBuckets(year, month){
+    const nDays = daysInMonth(year, month);
+    const pad = n=>String(n).padStart(2,'0');
+    const ym = `${year}-${pad(month+1)}`;
+    const days = Object.create(null);
+    const order = [];
+    for(let d=1; d<=nDays; d++){
+      const date = `${ym}-${pad(d)}`;
+      days[date] = {date, day:d, billed:0, newDebt:0, cp:0, matUsed:0, matWaste:0,
+                    paid:0, jobIncome:0, oldDebtPaid:0, matBought:0, expenses:0, net:0};
+      order.push(date);
+    }
+    state.jobs.forEach(j=>{
+      const t = jobTotals(j);
+      const b = days[j.dateReceived];
+      if(b){
+        b.billed   += t.totalBilled;
+        b.newDebt  += t.debt;
+        b.cp       += t.cp;
+        b.matUsed  += t.materialUsedCost;
+        b.matWaste += t.materialWasteCost;
+      }
+      (j.payments||[]).forEach(p=>{
+        const pb = p && days[p.date];
+        if(!pb) return;
+        const amt = (Number(p.cash)||0)+(Number(p.bank)||0);
+        pb.paid += amt; pb.jobIncome += amt;
+      });
+    });
+    allOldDebtPayments().forEach(p=>{
+      const b = days[p.date];
+      if(!b) return;
+      const amt = p.cash + p.bank;
+      b.paid += amt; b.oldDebtPaid += amt;
+    });
+    allStockPurchases().forEach(p=>{
+      const b = days[p.date];
+      if(b) b.matBought += p.qty * p.unitCost;
+    });
+    state.expenses.forEach(e=>{
+      const b = days[e.date];
+      if(b) b.expenses += Number(e.amount)||0;
+    });
+    const list = order.map(date=>{
+      const b = days[date];
+      b.net = Math.max(b.paid - b.cp - b.matUsed - b.matWaste, 0);
+      return b;
+    });
+    return {ym, nDays, days, order, list};
   }
+  // Adds up one field across every day of a bucketed month.
+  function bucketTotal(list, field){ return list.reduce((s,b)=>s+b[field], 0); }
+
   function monthStats(){
     recomputeAllCustomers();
-    const now = new Date(); const ym = now.toISOString().slice(0,7);
-    const monthStart = ym+'-01', monthEnd = ym+'-31';
+    const now = new Date();
+    // Local parts, never toISOString() — the shop is UTC+1, so between local midnight and
+    // 1am on the 1st the UTC month is still the previous one. See isoOf().
+    const ym = todayISO().slice(0,7);
+    const bk = monthDailyBuckets(now.getFullYear(), now.getMonth());
+    const L = bk.list;
+
+    const billed         = bucketTotal(L,'billed');
+    const debt           = bucketTotal(L,'newDebt');
+    const cp             = bucketTotal(L,'cp');
+    const matCostUsed    = bucketTotal(L,'matUsed');
+    const matWasteCost   = bucketTotal(L,'matWaste');
+    const matCost        = bucketTotal(L,'matBought');
+    const monthExpenseTotal = bucketTotal(L,'expenses');
+    // Cash that actually came in this month, on the dates it came in. This is what
+    // Net Cash is built from, and it is the same basis as the Summary table.
+    const paid           = bucketTotal(L,'paid');
+    const oldPaidMonth   = bucketTotal(L,'oldDebtPaid');
+    // THE FIX: the month's Net Profit is the sum of the days, each clamped, which is
+    // exactly what the Summary's MONTH TOTAL shows.
+    const profit         = bucketTotal(L,'net');
+
+    const today = bk.days[todayISO()] ||
+      {billed:0, paid:0, jobIncome:0, oldDebtPaid:0, matBought:0, matUsed:0, matWaste:0};
+
+    // Deliberately a different basis from `paid`: "of the value we billed this month, how
+    // much has been collected on those jobs" — which is what pairs with `debt` above.
+    // It is a job-based ratio, not a cash-in-the-month one, and is labelled as such.
     const monthJobs = state.jobs.filter(j => (j.dateReceived||'').slice(0,7) === ym);
-    let billed=0,paid=0,debt=0,cp=0,matCostUsed=0,matWasteCost=0;
-    monthJobs.forEach(j=>{
-      const t=jobTotals(j); billed+=t.totalBilled; paid+=t.totalPaid; debt+=t.debt; cp+=t.cp;
-      matCostUsed += t.materialUsedCost; matWasteCost += t.materialWasteCost;
-    });
-    const matCost = materialPurchaseCostInRange(monthStart, monthEnd);
-    const monthExpenses = state.expenses.filter(e=>(e.date||'').slice(0,7)===ym);
-    const monthExpenseTotal = monthExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
-    const todayJobs = state.jobs.filter(j=>j.dateReceived===todayISO());
-    let tbilled=0,tpaid=0,todayMatCostUsed=0,todayMatWasteCost=0;
-    todayJobs.forEach(j=>{ const t=jobTotals(j); tbilled+=t.totalBilled; tpaid+=t.totalPaid; todayMatCostUsed+=t.materialUsedCost; todayMatWasteCost+=t.materialWasteCost; });
-    const todayJobIncome = tpaid;
-    const todayMatCost = materialPurchaseCostOnDate(todayISO());
-    const oldPays = allOldDebtPayments();
-    const oldPaidMonth = oldPays.filter(p=>(p.date||'').slice(0,7)===ym).reduce((s,p)=>s+p.cash+p.bank,0);
-    const oldPaidToday = oldPays.filter(p=>p.date===todayISO()).reduce((s,p)=>s+p.cash+p.bank,0);
-    paid += oldPaidMonth; tpaid += oldPaidToday;
+    const paidOnMonthJobs = monthJobs.reduce((s,j)=>s+jobTotals(j).totalPaid, 0);
+
     const outstandingOld = state.customers.reduce((s,c)=>s+Math.max(c.openingDebtRemaining||0,0),0);
     const outstanding = state.jobs.reduce((s,j)=>s+jobTotals(j).debt,0) + outstandingOld;
     const byStatus = {};
     STATUSES.forEach(s=>byStatus[s]=0);
     state.jobs.forEach(j=>{ byStatus[j.status] = (byStatus[j.status]||0)+1; });
-    return {billed, paid, debt, cp, matCost, todayMatCost, matCostUsed, todayMatCostUsed, matWasteCost, todayMatWasteCost,
-            profit: paid-cp-matCostUsed-matWasteCost, collectionRate: billed? paid/billed:0,
+    return {billed, paid, debt, cp, matCost, matCostUsed, matWasteCost,
+            todayMatCost: today.matBought, todayMatCostUsed: today.matUsed, todayMatWasteCost: today.matWaste,
+            profit, collectionRate: billed ? paidOnMonthJobs/billed : 0,
             monthExpenseTotal, netCash: paid - monthExpenseTotal - matCost,
-            todayBilled:tbilled, todayJobIncome, todayPaid:tpaid, oldDebtPaidToday:oldPaidToday, oldDebtPaidMonth:oldPaidMonth,
+            todayBilled: today.billed, todayJobIncome: today.jobIncome, todayPaid: today.paid,
+            oldDebtPaidToday: today.oldDebtPaid, oldDebtPaidMonth: oldPaidMonth,
             outstanding, outstandingOld, byStatus, jobCount: monthJobs.length};
   }
 
@@ -2083,18 +2227,9 @@
     const dateFor = d => `${year}-${pad(month+1)}-${pad(d)}`;
     const today = todayISO();
 
-    const paidByDay = {}, cpByDay = {}, matUsedByDay = {}, matWasteByDay = {};
-    for(let d=1; d<=nDays; d++){ const k=dateFor(d); paidByDay[k]=0; cpByDay[k]=0; matUsedByDay[k]=0; matWasteByDay[k]=0; }
-    state.jobs.forEach(j=>{
-      (j.payments||[]).forEach(p=>{ if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += (Number(p.cash)||0)+(Number(p.bank)||0); });
-      if(j.dateReceived && cpByDay.hasOwnProperty(j.dateReceived)){
-        const t = jobTotals(j);
-        cpByDay[j.dateReceived] += Number(j.cp)||0;
-        matUsedByDay[j.dateReceived] += t.materialUsedCost;
-        matWasteByDay[j.dateReceived] += t.materialWasteCost;
-      }
-    });
-    allOldDebtPayments().forEach(p=>{ if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += p.cash+p.bank; });
+    // Same buckets the Dashboard and the Summary table read, so the target can't be
+    // measured against a Net Profit either of them would deny.
+    const bk = monthDailyBuckets(year, month);
 
     const sharePct = (s.targetBasis === 'net') ? 100 : (Number(s.pfPct)||0);
     // A target divided by 31 when the shop shuts on Sundays sets a daily number that
@@ -2107,10 +2242,7 @@
     const valByDay = {};
     for(let d=1; d<=nDays; d++){
       const date = dateFor(d);
-      // Same Net Profit formula as dayStats(), monthStats() and the Summary day table — all four
-      // must stay in step, or the target card reports progress against a figure the Summary denies.
-      const net = Math.max(paidByDay[date] - cpByDay[date] - matUsedByDay[date] - matWasteByDay[date], 0);
-      const val = net * sharePct/100;
+      const val = bk.days[date].net * sharePct/100;
       valByDay[date] = val;
       const work = isWorkDay(date);
       if(work) workDaysTotal++;
@@ -2300,26 +2432,13 @@
     const m = monthStats();
     const late = overdueJobs();
     const incomeSeries = (()=>{
-      const now = new Date(), ym = now.toISOString().slice(0,7);
-      const n = daysInMonth(now.getFullYear(), now.getMonth());
-      const pad = x=>String(x).padStart(2,'0');
-      // One pass over the payments to bucket them by date, instead of re-scanning every
-      // job (and rebuilding allOldDebtPayments()) once per day of the month.
-      const byDate = Object.create(null);
-      state.jobs.forEach(j=>(j.payments||[]).forEach(p=>{
-        if(!p || !p.date) return;
-        byDate[p.date] = (byDate[p.date]||0) + (Number(p.cash)||0) + (Number(p.bank)||0);
+      // Same buckets as every other figure on the page, so the chart can't disagree with
+      // the cards above it. getFullYear/getMonth are local — a UTC month here read as the
+      // previous one between local midnight and 1am on the 1st.
+      const now = new Date();
+      return monthDailyBuckets(now.getFullYear(), now.getMonth()).list.map(b=>({
+        label: fmtDate(b.date), value: b.paid, tick: (b.day===1||b.day%5===0)?String(b.day):''
       }));
-      allOldDebtPayments().forEach(p=>{
-        if(!p || !p.date) return;
-        byDate[p.date] = (byDate[p.date]||0) + p.cash + p.bank;
-      });
-      const out = [];
-      for(let d=1; d<=n; d++){
-        const date = `${ym}-${pad(d)}`;
-        out.push({label: fmtDate(date), value: byDate[date]||0, tick: (d===1||d%5===0)?String(d):''});
-      }
-      return out;
     })();
     const usage = computeMaterialUsage();
     const reorder = state.materials.filter(mt => {
@@ -2338,8 +2457,8 @@
       <div class="lg-grid cols-4">
         <div class="lg-card lg-kpi teal"><div class="num">${naira(m.billed)}</div><div class="lbl">Billed This Month</div></div>
         <div class="lg-card lg-kpi debt"><div class="num">${naira(m.outstanding)}</div><div class="lbl">Debt Outstanding${m.outstandingOld>0?` <span style="font-weight:400;">(${naira(m.outstandingOld)} is old debt)</span>`:''}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600">${(m.collectionRate*100).toFixed(1)}%</div></div>
-        <div class="lg-card"><div class="lg-card-title">Net Profit (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.profit)}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600">${(m.collectionRate*100).toFixed(1)}%</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">of what you billed this month, paid so far</div></div>
+        <div class="lg-card"><div class="lg-card-title">Net Profit (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.profit)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">same figure as the Summary month total</div></div>
       </div>
       <div class="lg-grid cols-4">
         <div class="lg-card"><div class="lg-card-title">Jobs This Month</div><div style="font-size:20px;font-weight:600">${m.jobCount}</div></div>
@@ -2785,6 +2904,7 @@
         renderDayView();
       });
     });
+    attachChecklistHandlers(renderDayView);
     attachStatusHandlers(renderDayView);
     attachDeleteHandlers(renderDayView);
     attachPaymentHandlers(renderDayView);
@@ -2804,66 +2924,31 @@
     const pad = n=>String(n).padStart(2,'0');
     const dateFor = d => `${year}-${pad(month+1)}-${pad(d)}`;
 
-    // Billed & new-debt keyed by job creation date
-    const byDay = {};
-    for(let d=1; d<=nDays; d++) byDay[dateFor(d)] = {billed:0, newDebt:0};
-    state.jobs.forEach(j=>{
-      if(!j.dateReceived || !byDay.hasOwnProperty(j.dateReceived)) return;
-      const t = jobTotals(j);
-      byDay[j.dateReceived].billed += t.totalBilled;
-      byDay[j.dateReceived].newDebt += t.debt;
-    });
-
-    // Paid, keyed by the ACTUAL date each payment was recorded (not just job intake day —
-    // this is what makes debt collected later show up on the day it was really paid)
-    const paidByDay = {};
-    for(let d=1; d<=nDays; d++) paidByDay[dateFor(d)] = 0;
-    state.jobs.forEach(j=>{
-      (j.payments||[]).forEach(p=>{
-        if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += (Number(p.cash)||0)+(Number(p.bank)||0);
-      });
-    });
-    allOldDebtPayments().forEach(p=>{
-      if(paidByDay.hasOwnProperty(p.date)) paidByDay[p.date] += p.cash+p.bank;
-    });
-
-    // Cost of production keyed by job intake date; material cost (bought) keyed by purchase date;
-    // material cost (used) and (wasted) also keyed by job intake date — both come out of Net Profit
-    const cpByDay = {}, matCostByDay = {}, matCostUsedByDay = {}, matWasteByDay = {};
-    for(let d=1; d<=nDays; d++){ cpByDay[dateFor(d)] = 0; matCostByDay[dateFor(d)] = 0; matCostUsedByDay[dateFor(d)] = 0; matWasteByDay[dateFor(d)] = 0; }
-    state.jobs.forEach(j=>{
-      if(!j.dateReceived || !cpByDay.hasOwnProperty(j.dateReceived)) return;
-      cpByDay[j.dateReceived] += Number(j.cp)||0;
-      matCostUsedByDay[j.dateReceived] += jobTotals(j).materialUsedCost;
-      matWasteByDay[j.dateReceived] += jobTotals(j).materialWasteCost;
-    });
-    allStockPurchases().forEach(p=>{
-      if(matCostByDay.hasOwnProperty(p.date)) matCostByDay[p.date] += p.qty*p.unitCost;
-    });
-
-    // Expenses keyed by date
+    // Every daily figure comes from monthDailyBuckets(), which is also what the Dashboard
+    // and the target cards read. Billed/new-debt/cost/material are keyed to the day the job
+    // was taken in; money paid is keyed to the day it actually came in; stock buys and
+    // expenses to the day the cash left. This used to be four bucket-building loops of its
+    // own, which is how the Dashboard managed to disagree with this table.
+    const bk = monthDailyBuckets(year, month);
     const expByDay = {};
-    for(let d=1; d<=nDays; d++) expByDay[dateFor(d)] = 0;
-    state.expenses.forEach(e=>{
-      if(expByDay.hasOwnProperty(e.date)) expByDay[e.date] += Number(e.amount)||0;
-    });
+    bk.list.forEach(b=>{ expByDay[b.date] = b.expenses; });
 
     let cumDebt = 0, mBilled=0, mPaid=0, mNewDebt=0, mGrand=0, mTithe=0, mPf=0, mEx=0, activeDays=0, mCp=0, mMatCost=0, mMatCostUsed=0, mMatWaste=0;
     const rows = [];
-    for(let d=1; d<=nDays; d++){
-      const date = dateFor(d);
-      const billed = byDay[date].billed;
-      const newDebt = byDay[date].newDebt;
-      const paid = paidByDay[date];
-      const cp = cpByDay[date];
-      const matCost = matCostByDay[date];
-      const matCostUsed = matCostUsedByDay[date];
-      const matWaste = matWasteByDay[date];
+    for(let i=0; i<bk.list.length; i++){
+      const b = bk.list[i];
+      const d = b.day, date = b.date;
+      const billed = b.billed;
+      const newDebt = b.newDebt;
+      const paid = b.paid;
+      const cp = b.cp;
+      const matCost = b.matBought;
+      const matCostUsed = b.matUsed;
+      const matWaste = b.matWaste;
       cumDebt += newDebt;
-      // net profit: cash collected minus cost of production minus the material actually USED and WASTED
-      // that day. Matches dayStats() and monthStats() — all three must stay in step, since Tithe/PF/EX
-      // are split off this figure.
-      const grand = Math.max(paid - cp - matCostUsed - matWaste, 0);
+      // net profit: cash collected minus cost of production minus the material actually USED
+      // and WASTED that day, clamped at zero — computed once, in monthDailyBuckets().
+      const grand = b.net;
       const tithe = grand * s.tithePct/100;
       const pf = grand * s.pfPct/100;
       const ex = grand * s.exPct/100;
@@ -3787,6 +3872,7 @@
     const filterNote = `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">${jobsDateFilterOn ? `Showing jobs received on ${fmtDate(jobsViewDate)} (${jobs.length})` : `Showing all jobs, every date (${jobs.length})`}</div>`;
     if(jobsView==='table'){
       body.innerHTML = `<div class="lg-card">${filterNote}${renderJobsTable(jobs, true)}</div>`;
+      attachChecklistHandlers();
       attachStatusHandlers();
       attachDeleteHandlers();
       attachPaymentHandlers();
@@ -3802,6 +3888,7 @@
         ${col.length? col.map(j=>renderJobCard(j)).join('') : '<div class="lg-empty" style="padding:12px;font-size:12px;">No jobs</div>'}
       </div>`;
     }).join('')}</div>`;
+    attachChecklistHandlers();
     attachStatusHandlers();
     attachDeleteHandlers();
     attachPaymentHandlers();
@@ -3858,7 +3945,8 @@
     const t = jobTotals(j);
     return `<div class="job-card" data-id="${j.id}">
       <div class="jc-top"><span>${esc(j.customerName)}</span><span class="jc-amt">${naira(t.totalBilled)}</span></div>
-      <div class="jc-desc">${esc(j.description || (j.items[0]?j.items[0].service:''))} &middot; ${fmtDate(j.dateReceived)}</div>
+      <div class="jc-desc">${fmtDate(j.dateReceived)}</div>
+      ${jobChecklistHTML(j, true)}
       ${t.debt>0 ? `<div class="flag">Owes ${naira(t.debt)}</div>`:''}
       ${t.credit>0 ? `<div style="color:var(--teal);font-weight:600;">Credit ${naira(t.credit)}</div>`:''}
       ${jobMaterialsList(j).length ? `<div style="font-size:11px;color:var(--muted);">Materials used: ${jobMaterialsList(j).map(m=>`${esc(m.name)} \u00d7${m.qty}${Number(m.waste)>0?` <span style="color:var(--clay);">(+${m.waste} wasted)</span>`:''}`).join(', ')} (${naira(t.materialUsedCost)} used${t.materialWasteCost>0?` + ${naira(t.materialWasteCost)} wasted`:''} — counted in today's material cost; see <a href="#" class="goto-purchase-log" style="color:var(--teal);">Purchase Log</a> for what was spent buying stock)</div>` : ''}
@@ -3954,7 +4042,7 @@
       return `<tr>
         <td>${fmtDate(j.dateReceived)}</td>
         <td>${esc(j.customerName)}</td>
-        <td class="muted">${esc(j.description || (j.items[0]?j.items[0].service:'—'))}</td>
+        <td>${jobChecklistHTML(j, !!withActions)}</td>
         <td style="font-size:11.5px;">${dueCell(j)}</td>
         <td>${withActions ? `<select class="job-status-select" data-id="${j.id}">${STATUSES.map(s=>`<option value="${s}" ${s===j.status?'selected':''}>${s}</option>`).join('')}</select>` : `<span class="stamp ${STATUS_CLASS[j.status]}">${j.status}</span>`}</td>
         <td class="num-col">${naira(t.totalBilled)}</td>
@@ -4039,12 +4127,36 @@
       clearTimeout(pendingSearchTimer);
       pendingSearchTimer = setTimeout(renderPending, 180);
     });
+    attachChecklistHandlers(renderPending);
     attachStatusHandlers(renderPending);
     attachDeleteHandlers(renderPending);
     attachPaymentHandlers(renderPending);
     attachWasteHandlers(renderPending);
     attachCPHandlers(renderPending);
     attachGuideHandlers(renderPending);
+  }
+  // Ticking a line off. The list is re-derived before writing so the stored ticks always match
+  // the job's current items, and only `checklist` is written — a job's status is still the
+  // owner's call, because "all items ticked" is not the same as "collected and delivered".
+  function attachChecklistHandlers(reRender){
+    reRender = reRender || defaultJobsReRender;
+    document.querySelectorAll('.job-item-check').forEach(box=>{
+      box.addEventListener('change', async ()=>{
+        const j = state.jobs.find(x=>x.id===box.dataset.id);
+        if(!j) return;
+        const list = jobChecklist(j);
+        const i = Number(box.dataset.i);
+        if(!list[i]) return;
+        list[i].d = box.checked;
+        j.checklist = list;
+        await save('jobs');
+        const done = list.filter(c=>c.d).length;
+        toast(done===list.length
+          ? `${j.customerName} — all ${list.length} done`
+          : `${j.customerName} — ${done} of ${list.length} done`);
+        reRender();
+      });
+    });
   }
   function attachStatusHandlers(reRender){
     reRender = reRender || defaultJobsReRender;
@@ -5865,7 +5977,9 @@
   // grouped under "Not recorded" so the gap is visible rather than silently dropped.
   let staffScope = 'month';
   function renderStaff(){
-    const now = new Date(), ym = now.toISOString().slice(0,7);
+    // Local month, not the UTC one — toISOString() here read as last month between local
+    // midnight and 1am on the 1st, and the whole tab quietly scoped to the wrong period.
+    const now = new Date(), ym = todayISO().slice(0,7);
     const monthLabel = now.toLocaleDateString('en-NG',{month:'long',year:'numeric'});
     const scoped = staffScope==='month'
       ? state.jobs.filter(j=>(j.dateReceived||'').slice(0,7)===ym)
@@ -6057,6 +6171,18 @@
       if((Number(j.staffRev)||0) >= rev) return;
       j.staffRev = rev;
       if(su.byName) j.operator = j.operator || su.byName;
+      // Ticks made on the floor are the truth about what's finished, so they replace the
+      // ledger's copy — matched by label, so a line the owner has since edited or removed
+      // is simply dropped rather than resurrected. Still one-directional: the ledger never
+      // writes the checklist back to the task, so there is no loop.
+      if(Array.isArray(t.checklist)){
+        const fromFloor = t.checklist;
+        j.checklist = jobChecklistLines(j).map(label=>{
+          const hit = fromFloor.find(c=>c && c.t === label);
+          const own = (Array.isArray(j.checklist)?j.checklist:[]).find(c=>c && c.t === label);
+          return {t: label, d: hit ? !!hit.d : (own ? !!own.d : false)};
+        });
+      }
       // ACCEPTED just claims the job; only the two production stages are real
       // ledger statuses. DELIVERED is never set from the floor — it's tied to
       // collecting the balance, which is the owner's call.
@@ -6186,6 +6312,10 @@
       // Deliberately no price, no payments, no debt — the shop floor gets the
       // work and the artwork, never the money.
       spec: [jobSpecText(job), note && note.trim() ? 'Note: '+note.trim() : ''].filter(Boolean).join('\n'),
+      // The same tickable list the ledger shows, so the floor works the order line by line
+      // and the owner sees which pieces are finished. Labels only — quantities and
+      // descriptions, never prices, same rule as `spec`.
+      checklist: jobChecklist(job),
       dueDate: job.dueDate || '',
       stage: 'SENT',
       attachments,
