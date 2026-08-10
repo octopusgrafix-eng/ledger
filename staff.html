@@ -285,6 +285,18 @@
   .wl-drop{display:block;color:var(--muted);}
   .wl-take:active,.wl-drop:active{opacity:.6;}
   .wl-foot{font-size:10.5px;color:var(--muted);margin-top:6px;}
+  /* The line's own clock. Green while there's room, amber as it runs out, clay once it's over —
+     the same three the rest of the app uses, so "late" reads the same here as everywhere else. */
+  .wl-cd{display:block;font-variant-numeric:tabular-nums;font-weight:700;}
+  .cd-ok{color:var(--green);}
+  .cd-soon{color:var(--amber);}
+  .cd-late{color:var(--clay);}
+  .cd-donetime{color:var(--muted);font-weight:400;}
+  .cd-latedone{color:var(--clay);font-weight:400;}
+  .wl-est{font-size:11px;padding:2px 4px;margin-top:2px;width:auto;min-width:86px;}
+  @keyframes wlLate{0%,100%{opacity:1;}50%{opacity:.45;}}
+  .wl-row:not(.is-done) .cd-late{animation:wlLate 2s ease-in-out infinite;}
+  @media (prefers-reduced-motion: reduce){ .wl-row:not(.is-done) .cd-late{animation:none;} }
   .job .spec{font-size:13px;line-height:1.6;white-space:pre-wrap;margin-top:9px;
     border-top:1px dotted var(--rule);padding-top:9px;word-break:break-word;}
   .job .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px;}
@@ -1117,6 +1129,15 @@
     $('jobs-scroll').querySelectorAll('[data-drop]').forEach(b=>{
       b.addEventListener('click', ()=> dropJobItem(b.dataset.drop, Number(b.dataset.i), b));
     });
+    $('jobs-scroll').querySelectorAll('[data-est]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{
+        const m = Number(sel.value)||0;
+        if(m) setLineEstimate(sel.dataset.est, Number(sel.dataset.i), m, sel);
+      });
+    });
+    $('jobs-scroll').querySelectorAll('[data-clear]').forEach(b=>{
+      b.addEventListener('click', ()=> clearLineEstimate(b.dataset.clear, Number(b.dataset.i), b));
+    });
     $('jobs-scroll').querySelectorAll('.att img[data-full]').forEach(img=>{
       img.addEventListener('click', (e)=>{
         e.preventDefault();
@@ -1146,12 +1167,15 @@
         Work on this job · <b class="${done===list.length?'wl-all':''}">${done} of ${list.length} done</b>
         ${mineCount ? `<span class="wl-lock">${mineCount} line${mineCount===1?'':'s'} yours</span>` : ''}
         ${blocked ? `<span class="wl-lock">kept for ${esc(t.assignedToName||'someone else')}</span>` : ''}
+        ${(()=>{ const late = list.filter(c=>{ const k=wlClock(c); return k && !k.done && k.late; }).length;
+                 return late ? `<span class="wl-lock cd-late"><b>${late} line${late===1?'':'s'} over time</b></span>` : ''; })()}
       </div>
       ${list.map((c,i)=>{
         const held  = c && c.by ? c.by : '';
         const mine  = held === me.uid;
         const other = held && !mine;
         const canTick = (mine || owner) && !blocked;
+        const clock = wlClock(c);
         return `<div class="wl-row${c && c.d?' is-done':''}">
           <label class="wl-item${c && c.d?' is-done':''}">
             <input type="checkbox" data-tick="${esc(t.id)}" data-i="${i}"
@@ -1164,6 +1188,15 @@
               : other ? `<span>${esc(c.byName || 'taken')}</span>`
               : blocked ? `<span class="wl-muted">—</span>`
               : `<button class="wl-take" data-take="${esc(t.id)}" data-i="${i}" type="button">I'll do this</button>`}
+            ${clock
+              ? `<span class="wl-cd ${wlClockClass(c)}" data-cd="${esc(t.id)}|${i}">${esc(wlClockText(c))}</span>
+                 ${(mine && !c.d) ? `<button class="wl-drop" data-clear="${esc(t.id)}" data-i="${i}" type="button">change</button>` : ''}`
+              : (mine && !c.d)
+                ? `<select class="wl-est" data-est="${esc(t.id)}" data-i="${i}">
+                     <option value="">how long?</option>
+                     ${WL_ESTIMATES.map(m=>`<option value="${m}">${estLabel(m)}</option>`).join('')}
+                   </select>`
+                : ''}
           </div>
         </div>`;
       }).join('')}
@@ -1235,9 +1268,55 @@
       t: (c && c.t) || '',
       d: !!(c && c.d),
       by: (c && c.by) || '',
-      byName: (c && c.byName) || ''
+      byName: (c && c.byName) || '',
+      // How long the person who took this line said it would take, and when their clock
+      // started. `endAt` is stamped when the line is ticked off, which is what turns a live
+      // countdown into a finished record of how long it actually took.
+      mins: Number(c && c.mins) || 0,
+      at: (c && c.at) || '',
+      endAt: (c && c.endAt) || ''
     };
     return Object.assign(base, over || {});
+  }
+  // Minutes as something a person reads at a glance. Never "0h 5m", never "125 minutes".
+  function shortDur(ms){
+    const mins = Math.max(0, Math.round(ms/60000));
+    if(mins < 60) return mins+'m';
+    const h = Math.floor(mins/60), m = mins%60;
+    return m ? h+'h '+m+'m' : h+'h';
+  }
+  const WL_ESTIMATES = [15,30,45,60,90,120,180,240,480];
+  function estLabel(mins){ return mins<60 ? mins+' min' : shortDur(mins*60000); }
+  // The state of one line's clock. Returns null when there's nothing to count.
+  function wlClock(c){
+    const mins = Number(c && c.mins) || 0;
+    if(!mins || !c.at) return null;
+    const start = Date.parse(c.at);
+    if(isNaN(start)) return null;
+    const due = start + mins*60000;
+    if(c.d){
+      const end = c.endAt ? Date.parse(c.endAt) : NaN;
+      if(isNaN(end)) return {done:true, took:null, late:false, mins};
+      return {done:true, took:end-start, late:end>due, over:end-due, mins};
+    }
+    const left = due - Date.now();
+    return {done:false, left, late:left<0, over:-left,
+            soon: left>=0 && left <= Math.min(10*60000, mins*60000*0.2), mins};
+  }
+  function wlClockText(c){
+    const k = wlClock(c);
+    if(!k) return '';
+    if(k.done){
+      if(k.took==null) return 'done';
+      return 'took '+shortDur(k.took)+(k.late ? ' · '+shortDur(k.over)+' over' : ' · on time');
+    }
+    return k.late ? shortDur(k.over)+' late' : shortDur(k.left)+' left';
+  }
+  function wlClockClass(c){
+    const k = wlClock(c);
+    if(!k) return '';
+    if(k.done) return k.late ? 'cd-latedone' : 'cd-donetime';
+    return k.late ? 'cd-late' : (k.soon ? 'cd-soon' : 'cd-ok');
   }
   // Shared write for every checklist change. `stage` is carried unchanged unless the caller
   // asks to move it, so the ledger cannot mistake a tick or a claim for a stage change.
@@ -1310,12 +1389,54 @@
     }
   }
 
+  // Saying how long it will take starts the clock. The estimate and the start time are stored
+  // together, so the countdown is derived rather than stored ticking — nothing to keep in sync,
+  // and it survives a refresh, a reconnect, or the phone being locked all afternoon.
+  async function setLineEstimate(id, i, mins, sel){
+    const t = tasks.find(x=>x.id===id);
+    if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
+    if(t.checklist[i].by !== me.uid && myRole !== 'owner') return;
+    sel.disabled = true;
+    const checklist = t.checklist.map((c,n)=> n===i
+      ? wlEntry(c, {mins: mins, at: new Date().toISOString(), endAt: ''})
+      : wlEntry(c));
+    try{
+      await writeChecklist(t, checklist, null, 'Clock started — '+estLabel(mins)+' on that line.');
+    }catch(err){
+      console.error('estimate failed', err);
+      sel.disabled = false;
+      toast('Could not start the clock. Check your connection.');
+    }
+  }
+  // Clearing it back to no estimate, for when the first guess was wrong. The next estimate
+  // restarts the clock from now rather than carrying the original start time.
+  async function clearLineEstimate(id, i, btn){
+    const t = tasks.find(x=>x.id===id);
+    if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
+    if(t.checklist[i].by !== me.uid && myRole !== 'owner') return;
+    btn.disabled = true;
+    const checklist = t.checklist.map((c,n)=> n===i
+      ? wlEntry(c, {mins:0, at:'', endAt:''})
+      : wlEntry(c));
+    try{
+      await writeChecklist(t, checklist, null, 'Clock cleared — set a new time.');
+    }catch(err){
+      console.error('clear estimate failed', err);
+      btn.disabled = false;
+      toast('Could not clear that. Check your connection.');
+    }
+  }
+
   async function tickJobItem(id, i, box){
     const t = tasks.find(x=>x.id===id);
     if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
     const wanted = box.checked;
     box.disabled = true;
-    const checklist = t.checklist.map((c,n)=> n===i ? wlEntry(c, {d:wanted}) : wlEntry(c));
+    // Ticking stops the clock; unticking sets it running again from the original start, so
+    // an accidental tick doesn't quietly reset how long the line has really been open.
+    const checklist = t.checklist.map((c,n)=> n===i
+      ? wlEntry(c, {d:wanted, endAt: wanted ? new Date().toISOString() : ''})
+      : wlEntry(c));
     try{
       const done = checklist.filter(c=>c.d).length;
       await writeChecklist(t, checklist, null,
@@ -1470,6 +1591,25 @@
   setInterval(()=>{
     if(tab==='clock' && !document.hidden && me && shopId) renderClock();
   }, 30000);
+
+  // The line countdowns have to move on their own. Re-rendering the job list once a second
+  // would throw away a half-open "how long?" dropdown and undo anyone mid-tap — the same trap
+  // as a snapshot repainting over someone's typing. So this rewrites only the text and colour
+  // of the countdown spans, in place, and leaves the rest of the card alone.
+  setInterval(()=>{
+    if(document.hidden || tab!=='jobs') return;
+    document.querySelectorAll('[data-cd]').forEach(el=>{
+      const bits = String(el.dataset.cd).split('|');
+      const t = tasks.find(x=>x.id===bits[0]);
+      if(!t || !Array.isArray(t.checklist)) return;
+      const c = t.checklist[Number(bits[1])];
+      if(!c) return;
+      const txt = wlClockText(c);
+      if(el.textContent !== txt) el.textContent = txt;
+      const cls = 'wl-cd ' + wlClockClass(c);
+      if(el.className !== cls) el.className = cls;
+    });
+  }, 1000);
 
   // ============================================================
   //  lightbox

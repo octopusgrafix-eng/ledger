@@ -306,6 +306,12 @@
      docket, so the name belongs beside the work, not just at the top of the job. */
   .wl-by{font-size:10px;color:var(--teal);text-decoration:none;white-space:nowrap;}
   .wl-item.is-done .wl-by{color:var(--muted);}
+  /* The clock the floor put on this line, read back here. Clay once it's over the time they
+     themselves gave — the shop's own estimate is the yardstick, not one imposed from the desk. */
+  .wl-cd{font-size:10px;color:var(--muted);text-decoration:none;white-space:nowrap;
+    font-variant-numeric:tabular-nums;}
+  .wl-cd.is-late{color:var(--clay);font-weight:700;}
+  .wl-head .wl-lateflag{color:var(--clay);}
   .kpi-drill{
     background:none;border:none;padding:0;cursor:pointer;
     font:inherit;color:inherit;
@@ -1627,26 +1633,68 @@
       // than only on the job.
       return {t, d: was ? !!was.d : false,
               by: was && was.by ? was.by : '',
-              byName: was && was.byName ? was.byName : ''};
+              byName: was && was.byName ? was.byName : '',
+              // The estimate the floor put on this line, when their clock started, and when
+              // they ticked it off. Set on the shop floor; the ledger only reads them.
+              mins: Number(was && was.mins) || 0,
+              at: was && was.at ? was.at : '',
+              endAt: was && was.endAt ? was.endAt : ''};
     });
   }
   function jobChecklistProgress(j){
     const list = jobChecklist(j);
-    return {list, done: list.filter(c=>c.d).length, total: list.length};
+    return {list, done: list.filter(c=>c.d).length, total: list.length,
+            late: list.filter(c=>wlLate(c)).length};
+  }
+  // Read-only view of a line's clock, mirrored up from the shop floor. The ledger never sets
+  // these — it reports whether the floor is running over on work it said it would finish.
+  function wlShortDur(ms){
+    const mins = Math.max(0, Math.round(ms/60000));
+    if(mins < 60) return mins+'m';
+    const h = Math.floor(mins/60), m = mins%60;
+    return m ? h+'h '+m+'m' : h+'h';
+  }
+  function wlDue(c){
+    const mins = Number(c && c.mins)||0;
+    if(!mins || !c.at) return NaN;
+    const start = Date.parse(c.at);
+    return isNaN(start) ? NaN : start + mins*60000;
+  }
+  function wlLate(c){
+    const due = wlDue(c);
+    if(isNaN(due)) return false;
+    if(c.d){ const end = c.endAt ? Date.parse(c.endAt) : NaN; return !isNaN(end) && end > due; }
+    return Date.now() > due;
+  }
+  function wlLedgerText(c){
+    const due = wlDue(c);
+    if(isNaN(due)) return '';
+    if(c.d){
+      const end = c.endAt ? Date.parse(c.endAt) : NaN;
+      const start = Date.parse(c.at);
+      if(isNaN(end)) return '';
+      return 'took '+wlShortDur(end-start)+(end>due ? ' · '+wlShortDur(end-due)+' over' : ' · on time');
+    }
+    const left = due - Date.now();
+    return left < 0 ? wlShortDur(-left)+' late' : wlShortDur(left)+' left';
   }
   // The description cell everywhere jobs are tabled. A single-item job stays a single line —
   // a checkbox and nothing else — so the common case doesn't grow a header it doesn't need.
   function jobChecklistHTML(j, editable){
     const {list, done, total} = jobChecklistProgress(j);
     const multi = total > 1;
-    const head = multi
-      ? `<div class="wl-head">${j.description?esc(j.description)+' · ':''}<b class="${done===total?'wl-all':''}">${done} of ${total} done</b></div>`
+    const {late} = jobChecklistProgress(j);
+    const head = (multi || late)
+      ? `<div class="wl-head">${j.description?esc(j.description)+' · ':''}<b class="${done===total?'wl-all':''}">${done} of ${total} done</b>${
+          late?` · <b class="wl-lateflag">${late} over time</b>`:''}</div>`
       : '';
-    return `<div class="wl">${head}${list.map((c,i)=>`
-      <label class="wl-item${c.d?' is-done':''}">
+    return `<div class="wl">${head}${list.map((c,i)=>{
+      const clockText = wlLedgerText(c);
+      return `<label class="wl-item${c.d?' is-done':''}">
         <input type="checkbox" class="job-item-check" data-id="${j.id}" data-i="${i}" ${c.d?'checked':''} ${editable?'':'disabled'}>
-        <span>${esc(c.t)}${c.byName?` <span class="wl-by">${esc(c.byName)}</span>`:''}</span>
-      </label>`).join('')}</div>`;
+        <span>${esc(c.t)}${c.byName?` <span class="wl-by">${esc(c.byName)}</span>`:''}${
+          clockText?` <span class="wl-cd${wlLate(c)?' is-late':''}">${esc(clockText)}</span>`:''}</span>
+      </label>`;}).join('')}</div>`;
   }
 
   // ---------- due dates ----------
@@ -2460,11 +2508,12 @@
       }));
     })();
     const usage = computeMaterialUsage();
-    const reorder = state.materials.filter(mt => {
-      const u = usage[normName(mt.name)]||{qty:0,waste:0};
-      const remaining = Number(mt.opening||0)+Number(mt.restocked||0)-u.qty-u.waste;
-      return Number(mt.reorderLevel||0)>0 && remaining <= Number(mt.reorderLevel||0);
-    });
+    // materialRemaining() is shared with the Inventory tab's Stock Tracker. It used to be
+    // written out by hand here with `mt.restocked` — the legacy field alone, which is 0 for
+    // every material created since the purchase log existed — so the Dashboard understated
+    // stock by every purchase ever logged and nagged to reorder material that was in hand.
+    const reorder = state.materials.filter(mt =>
+      Number(mt.reorderLevel||0)>0 && materialRemaining(mt, usage) <= Number(mt.reorderLevel||0));
     content.innerHTML = `
       ${renderMonthTargetCard()}
       <div class="lg-grid cols-4">
@@ -2500,11 +2549,9 @@
       ${reorder.length ? `
       <div class="lg-card">
         <div class="lg-card-title" style="color:var(--clay)">Reorder Alerts</div>
-        ${reorder.map(mt=>{
-          const u = usage[normName(mt.name)]||{qty:0,waste:0};
-          const remaining = Number(mt.opening||0)+Number(mt.restocked||0)-u.qty-u.waste;
-          return `<div class="flag">⚠ ${mt.name} — remaining ${remaining} ${mt.unit||''} (reorder level ${mt.reorderLevel})</div>`;
-        }).join('')}
+        ${reorder.map(mt=>
+          `<div class="flag">⚠ ${esc(mt.name)} — remaining ${materialRemaining(mt, usage)} ${esc(mt.unit||'')} (reorder level ${mt.reorderLevel})</div>`
+        ).join('')}
       </div>` : ''}
       ${late.length ? `
       <div class="lg-card" style="border-left:3px solid var(--clay);">
@@ -4724,17 +4771,28 @@
     });
     return map;
   }
+  // Waste is tracked here too. It used to record only `qty`/`cost`, so the Daily Stock Usage
+  // grid quietly left spoiled material out — its Daily Cost read short of the figure that
+  // actually leaves Net Profit and enters the material purse, and its quantities didn't
+  // reconcile with the Stock Tracker, which does deduct waste from Remaining.
+  // `cost` is the full charge (used + wasted); `wasteCost` is the spoiled part of it.
   function computeDailyMaterialUsage(){
-    const map = {}; // NORM_KEY -> {date: {qty, cost}}
+    const map = {}; // NORM_KEY -> {date: {qty, waste, cost, wasteCost}}
     state.jobs.forEach(j=>{
       if(!j.dateReceived) return;
       jobMaterialsList(j).forEach(m=>{
         if(!m.name) return;
         const key = normName(m.name);
         if(!map[key]) map[key] = {};
-        if(!map[key][j.dateReceived]) map[key][j.dateReceived] = {qty:0, cost:0};
-        map[key][j.dateReceived].qty += Number(m.qty)||0;
-        map[key][j.dateReceived].cost += (Number(m.qty)||0) * (Number(m.unitCost)||0);
+        if(!map[key][j.dateReceived]) map[key][j.dateReceived] = {qty:0, waste:0, cost:0, wasteCost:0};
+        const unit  = Number(m.unitCost)||0;
+        const qty   = Number(m.qty)||0;
+        const waste = Number(m.waste)||0;
+        const cell = map[key][j.dateReceived];
+        cell.qty       += qty;
+        cell.waste     += waste;
+        cell.cost      += (qty + waste) * unit;
+        cell.wasteCost += waste * unit;
       });
     });
     return map;
@@ -4743,6 +4801,16 @@
     const legacy = Number(m.restocked)||0;
     const logged = (m.purchases||[]).reduce((s,p)=>s+(Number(p.qty)||0),0);
     return legacy + logged;
+  }
+  // What is left of a material, in its own unit. The one definition — the Dashboard's
+  // Reorder Alerts and the Inventory Stock Tracker both call this, because when each wrote
+  // the sum out by hand they disagreed: the Dashboard's copy counted only the legacy
+  // `restocked` field and so ignored every purchase in the log.
+  // `usage` is a computeMaterialUsage() map, passed in so a table can build it once.
+  function materialRemaining(m, usage){
+    const map = usage || computeMaterialUsage();
+    const u = map[normName(m.name)] || {qty:0, waste:0};
+    return Number(m.opening||0) + totalRestocked(m) - u.qty - u.waste;
   }
   function allStockPurchases(){
     const list = [];
@@ -4814,11 +4882,17 @@
     const pad = x=>String(x).padStart(2,'0');
     let running = matOpeningFor(`${ym}-01`);
     const monthOpening = running;
+    // "Start purse from" has to be honoured HERE as well as in matOpeningFor(). It wasn't:
+    // the opening balance excluded everything before the start date and then this loop added
+    // it all straight back in, so the KPI cards at the top of the tab and this table showed
+    // two different balances for the same day, out by exactly the pre-start movements.
+    const start = state.settings.matStartDate || '';
     let rows = '', inTotal = 0, outTotal = 0, shown = 0;
     for(let d=1; d<=n; d++){
       const date = `${ym}-${pad(d)}`;
-      const inflow = matInflowFor(date);
-      const spent  = matSpentFor(date);
+      const counts = !(start && date < start);
+      const inflow = counts ? matInflowFor(date) : 0;
+      const spent  = counts ? matSpentFor(date)  : 0;
       const opening = running;
       running = opening + inflow - spent;
       if(!inflow && !spent) continue;
@@ -4987,7 +5061,7 @@
       <div class="lg-card">
         <div class="lg-card-title">Daily Stock Usage — with Weekly Summary</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
-          Every day a material was used on a job, broken down by material, with a Daily Cost column, a subtotal row (qty + cost) at the end of each week, and a grand total. Below that: money spent bringing in new stock.
+          Every day a material came off the shelf, broken down by material. Each figure is what the job took in total — <b>used plus spoiled</b>, the same amount the Stock Tracker deducts from Remaining — with the spoiled part shown separately and in the cell's tooltip. <b>Daily Cost</b> counts both, so it matches the material cost that comes out of Net Profit and goes into the purse above. Weekly subtotals and a grand total at the end; below that, money spent bringing in new stock.
         </div>
         <div id="mt-daily"></div>
       </div>
@@ -5080,7 +5154,7 @@
     ${state.materials.map(m=>{
       const u = usage[normName(m.name)] || {qty:0, cost:0, waste:0, wasteCost:0};
       const restocked = totalRestocked(m);
-      const remaining = Number(m.opening||0)+restocked-u.qty-u.waste;
+      const remaining = materialRemaining(m, usage);
       const low = Number(m.reorderLevel||0)>0 && remaining <= Number(m.reorderLevel||0);
       return `<tr data-id="${m.id}">
         <td>${esc(m.name)}</td>
@@ -5134,12 +5208,16 @@
     materialKeys.forEach(k=> Object.keys(dailyMap[k]).forEach(d=>datesSet.add(d)));
     const dates = Array.from(datesSet).sort();
 
+    // A material column shows everything that came off the shelf that day — used AND spoiled,
+    // because that is what the Stock Tracker deducts from Remaining. The spoiled part gets its
+    // own column and a tooltip rather than being folded away silently, which is what this grid
+    // used to do: it counted `qty` only, so waste vanished from both the quantities and the cost.
     let rowsHtml = '';
     let weekTotals = {}; materialCols.forEach(m=>weekTotals[m.key]=0);
-    let weekRowTotal = 0, weekCostTotal = 0;
+    let weekRowTotal = 0, weekCostTotal = 0, weekWasteTotal = 0;
     let currentWeek = null;
     const grandTotals = {}; materialCols.forEach(m=>grandTotals[m.key]=0);
-    let grandRowTotal = 0, grandCostTotal = 0;
+    let grandRowTotal = 0, grandCostTotal = 0, grandWasteTotal = 0;
 
     function flushWeek(){
       if(currentWeek===null) return '';
@@ -5147,6 +5225,7 @@
         <td colspan="2">${currentWeek} TOTAL</td>
         ${materialCols.map(m=>`<td class="num-col">${weekTotals[m.key]}</td>`).join('')}
         <td class="num-col">${weekRowTotal}</td>
+        <td class="num-col ${weekWasteTotal>0?'flag':''}">${weekWasteTotal||''}</td>
         <td class="num-col">${naira(weekCostTotal)}</td>
       </tr>`;
     }
@@ -5156,34 +5235,38 @@
       if(currentWeek!==null && wk!==currentWeek){
         rowsHtml += flushWeek();
         weekTotals = {}; materialCols.forEach(m=>weekTotals[m.key]=0);
-        weekRowTotal = 0; weekCostTotal = 0;
+        weekRowTotal = 0; weekCostTotal = 0; weekWasteTotal = 0;
       }
       currentWeek = wk;
-      let rowTotal = 0, rowCost = 0;
+      let rowTotal = 0, rowCost = 0, rowWaste = 0;
       const cells = materialCols.map(m=>{
-        const entry = (dailyMap[m.key] && dailyMap[m.key][date]) || {qty:0, cost:0};
-        rowTotal += entry.qty;
+        const entry = (dailyMap[m.key] && dailyMap[m.key][date]) || {qty:0, waste:0, cost:0, wasteCost:0};
+        const offShelf = entry.qty + entry.waste;
+        rowTotal += offShelf;
         rowCost += entry.cost;
-        weekTotals[m.key] += entry.qty;
-        grandTotals[m.key] += entry.qty;
-        return `<td class="num-col">${entry.qty||'—'}</td>`;
+        rowWaste += entry.waste;
+        weekTotals[m.key] += offShelf;
+        grandTotals[m.key] += offShelf;
+        const title = entry.waste ? ` title="${entry.qty} used + ${entry.waste} spoiled"` : '';
+        return `<td class="num-col${entry.waste?' flag':''}"${title}>${offShelf||'—'}</td>`;
       }).join('');
-      weekRowTotal += rowTotal; weekCostTotal += rowCost;
-      grandRowTotal += rowTotal; grandCostTotal += rowCost;
-      rowsHtml += `<tr><td>${fmtDate(date)}</td><td class="muted">${wk}</td>${cells}<td class="num-col">${rowTotal}</td><td class="num-col">${naira(rowCost)}</td></tr>`;
+      weekRowTotal += rowTotal; weekCostTotal += rowCost; weekWasteTotal += rowWaste;
+      grandRowTotal += rowTotal; grandCostTotal += rowCost; grandWasteTotal += rowWaste;
+      rowsHtml += `<tr><td>${fmtDate(date)}</td><td class="muted">${wk}</td>${cells}<td class="num-col">${rowTotal}</td><td class="num-col ${rowWaste>0?'flag':'muted'}">${rowWaste||'—'}</td><td class="num-col">${naira(rowCost)}</td></tr>`;
     });
     rowsHtml += flushWeek();
     rowsHtml += `<tr style="font-weight:700;border-top:2px solid var(--ink);">
       <td colspan="2">GRAND TOTAL</td>
       ${materialCols.map(m=>`<td class="num-col">${grandTotals[m.key]}</td>`).join('')}
       <td class="num-col">${grandRowTotal}</td>
+      <td class="num-col ${grandWasteTotal>0?'flag':''}">${grandWasteTotal||''}</td>
       <td class="num-col">${naira(grandCostTotal)}</td>
     </tr>`;
 
     const usageTable = `<div style="overflow-x:auto;"><table><thead><tr>
       <th>Date</th><th>Week</th>
       ${materialCols.map(m=>`<th>${esc(m.name)}</th>`).join('')}
-      <th>Daily Qty</th><th>Daily Cost (\u20a6)</th>
+      <th>Off the shelf</th><th>of which spoiled</th><th>Daily Cost (\u20a6)</th>
     </tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
 
     return usageTable + renderNewStockSpendSummary();
@@ -5209,7 +5292,7 @@
     return `<div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--rule);">
       <div class="lg-card-title" style="margin-top:0;">Money Spent on New Stock</div>
       <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
-        Based on your logged stock purchases (real cost paid at the time) — for comparison against the material cost actually used on jobs (Grand Total, above).
+        Based on your logged stock purchases (real cost paid at the time) — for comparison against the material charged onto jobs, used and spoiled together (Daily Cost grand total, above).
       </div>
       <div style="overflow-x:auto;"><table><thead><tr>
         <th>Material</th><th class="num-col">Restocked Qty</th><th class="num-col">Money Spent (\u20a6)</th>
@@ -5299,11 +5382,14 @@
     const pad = x=>String(x).padStart(2,'0');
     let running = exOpeningFor(`${ym}-01`);
     const monthOpening = running;
+    // Same start-date guard as exOpeningFor() — see the note in matCostMonthTable().
+    const start = state.settings.exStartDate || '';
     let rows = '', inTotal = 0, outTotal = 0, shown = 0;
     for(let d=1; d<=n; d++){
       const date = `${ym}-${pad(d)}`;
-      const inflow = exInflowFor(date);
-      const spent  = exSpentFor(date);
+      const counts = !(start && date < start);
+      const inflow = counts ? exInflowFor(date) : 0;
+      const spent  = counts ? exSpentFor(date)  : 0;
       const opening = running;
       running = opening + inflow - spent;
       if(!inflow && !spent) continue;
@@ -5673,11 +5759,14 @@
     const pad = x=>String(x).padStart(2,'0');
     let running = cpOpeningFor(`${ym}-01`);
     const monthOpening = running;
+    // Same start-date guard as cpOpeningFor() — see the note in matCostMonthTable().
+    const start = state.settings.cpStartDate || '';
     let rows = '', inTotal = 0, outTotal = 0, shown = 0;
     for(let d=1; d<=n; d++){
       const date = `${ym}-${pad(d)}`;
-      const inflow = cpInflowFor(date);
-      const spent  = cpSpentFor(date);
+      const counts = !(start && date < start);
+      const inflow = counts ? cpInflowFor(date) : 0;
+      const spent  = counts ? cpSpentFor(date)  : 0;
       const opening = running;
       running = opening + inflow - spent;
       if(!inflow && !spent) continue;
@@ -6204,7 +6293,10 @@
           return {t: label,
                   d: src ? !!src.d : false,
                   by: hit ? (hit.by||'') : (was && was.by ? was.by : ''),
-                  byName: hit ? (hit.byName||'') : (was && was.byName ? was.byName : '')};
+                  byName: hit ? (hit.byName||'') : (was && was.byName ? was.byName : ''),
+                  mins: src ? (Number(src.mins)||0) : 0,
+                  at: src && src.at ? src.at : '',
+                  endAt: src && src.endAt ? src.endAt : ''};
         });
       }
       // ACCEPTED just claims the job; only the two production stages are real
