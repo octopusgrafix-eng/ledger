@@ -1219,6 +1219,12 @@
     const canAdvance = next
       && (stage === 'SENT' ? (!forOther || myRole === 'owner')
                            : (mine || myRole === 'owner'));
+    // READY means the work is finished, so it cannot be reached with lines still open —
+    // otherwise the ledger is told a job is done while somebody is still holding a piece
+    // of it. Applies to the owner too: ticking the last line is the cheaper honest route,
+    // and the owner can tick any line.
+    const openLines = (Array.isArray(t.checklist) ? t.checklist : []).filter(c=>!(c && c.d)).length;
+    const heldOpen  = next === 'READY' && openLines > 0;
 
     return `<div class="card job ${stage==='READY'?'done':((mine||forMe)?'mine':'')}">
       <div class="hd">
@@ -1246,7 +1252,10 @@
         ${atts.some(a=>a.preview) ? '<div class="prevnote" style="margin-top:5px;">Previews, to show you the job — collect the print file from the owner.</div>' : ''}` : ''}
       ${t.staffNote ? `<div class="meta" style="margin-top:8px;">Note: ${esc(t.staffNote)}</div>` : ''}
       <div class="acts">
-        ${canAdvance ? `<button class="btn ${stage==='SENT'?'go':''} small" data-advance="${esc(t.id)}" type="button">${esc(NEXT_LABEL[stage])}</button>` : ''}
+        ${canAdvance ? `<button class="btn ${stage==='SENT'?'go':''} small" data-advance="${esc(t.id)}"
+            type="button" ${heldOpen?'disabled':''}>${esc(NEXT_LABEL[stage])}</button>` : ''}
+        ${(canAdvance && heldOpen) ? `<span class="muted" style="font-size:11.5px;">
+            ${openLines} line${openLines===1?'':'s'} still to tick off first.</span>` : ''}
         ${(!canAdvance && next) ? `<span class="muted" style="font-size:11.5px;">${
             (stage==='SENT' && forOther)
               ? esc(t.assignedToName||'Someone else')+' has to do this one.'
@@ -1456,6 +1465,16 @@
     const stage = t.stage || 'SENT';
     const next  = NEXT_STAGE[stage];
     if(!next) return;
+    // Re-checked here, not just left to the disabled button: a card painted before the last
+    // line was unticked would still carry an enabled button, and this is the write that
+    // tells the ledger the job is finished.
+    if(next === 'READY'){
+      const open = (Array.isArray(t.checklist) ? t.checklist : []).filter(c=>!(c && c.d)).length;
+      if(open > 0){
+        toast(open===1 ? 'One line still to tick off first.' : open+' lines still to tick off first.');
+        return;
+      }
+    }
 
     btn.disabled = true;
     const patch = {
