@@ -265,11 +265,26 @@
   .wl-head{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
   .wl-head .wl-all{color:var(--green);}
   .wl-lock{display:block;text-transform:none;letter-spacing:0;font-size:10.5px;margin-top:2px;}
-  .wl-item{display:flex;align-items:flex-start;gap:8px;font-size:13.5px;line-height:1.5;cursor:pointer;}
-  .wl-item input{width:auto;margin:3px 0 0;flex:0 0 auto;width:17px;height:17px;
+  /* Each line is taken separately, so the row carries the work on the left and who has it on
+     the right — the floor can see at a glance which pieces are spoken for. */
+  .wl-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
+    padding:3px 0;border-bottom:1px dotted var(--rule);}
+  .wl-row:last-of-type{border-bottom:none;}
+  .wl-item{display:flex;align-items:flex-start;gap:8px;font-size:13.5px;line-height:1.5;
+    cursor:pointer;min-width:0;flex:1 1 auto;}
+  .wl-item input{margin:3px 0 0;flex:0 0 auto;width:17px;height:17px;
     accent-color:var(--green);cursor:pointer;}
   .wl-item input:disabled{cursor:default;opacity:.5;}
   .wl-item.is-done > span{text-decoration:line-through;color:var(--muted);}
+  .wl-who{flex:0 0 auto;font-size:11px;text-align:right;line-height:1.5;color:var(--muted);}
+  .wl-who .wl-yours{color:var(--green);}
+  .wl-who .wl-muted{opacity:.5;}
+  .wl-take,.wl-drop{background:none;border:none;padding:0;cursor:pointer;font-family:inherit;
+    font-size:11px;text-decoration:underline;color:var(--ok-blue);}
+  .wl-take{font-weight:700;}
+  .wl-drop{display:block;color:var(--muted);}
+  .wl-take:active,.wl-drop:active{opacity:.6;}
+  .wl-foot{font-size:10.5px;color:var(--muted);margin-top:6px;}
   .job .spec{font-size:13px;line-height:1.6;white-space:pre-wrap;margin-top:9px;
     border-top:1px dotted var(--rule);padding-top:9px;word-break:break-word;}
   .job .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px;}
@@ -1096,6 +1111,12 @@
     $('jobs-scroll').querySelectorAll('[data-tick]').forEach(box=>{
       box.addEventListener('change', ()=> tickJobItem(box.dataset.tick, Number(box.dataset.i), box));
     });
+    $('jobs-scroll').querySelectorAll('[data-take]').forEach(b=>{
+      b.addEventListener('click', ()=> claimJobItem(b.dataset.take, Number(b.dataset.i), b));
+    });
+    $('jobs-scroll').querySelectorAll('[data-drop]').forEach(b=>{
+      b.addEventListener('click', ()=> dropJobItem(b.dataset.drop, Number(b.dataset.i), b));
+    });
     $('jobs-scroll').querySelectorAll('.att img[data-full]').forEach(img=>{
       img.addEventListener('click', (e)=>{
         e.preventDefault();
@@ -1104,25 +1125,49 @@
     });
   }
 
-  // The order, line by line, so a docket with five pieces of work can be worked and reported
-  // one piece at a time. Ticking is allowed to anyone in the shop once the job has been
-  // taken — before that it isn't yet anybody's job to be doing.
+  // The order, line by line — and each line is taken separately, so two people can work the
+  // same customer's docket at once: one on the banner, one on the stickers. A line you have
+  // taken is yours to tick; a line someone else took is visible but not yours to touch, which
+  // is how the floor avoids two people quietly doing the same piece of work.
+  //
+  // Claiming is still gated by the job's reservation: if the owner put the whole docket aside
+  // for one person, only they can take lines off it.
   function renderJobChecklist(t){
     const list = Array.isArray(t.checklist) ? t.checklist : [];
     if(list.length < 1) return '';
-    const stage = t.stage || 'SENT';
-    const mine  = t.acceptedBy === me.uid;
-    const canTick = stage !== 'SENT' && (mine || myRole === 'owner');
+    const forOther = !!t.assignedTo && t.assignedTo !== me.uid;
+    const owner = myRole === 'owner';
+    const blocked = forOther && !owner;
     const done = list.filter(c=>c && c.d).length;
+    const mineCount = list.filter(c=>c && c.by === me.uid).length;
+
     return `<div class="wl">
       <div class="wl-head">
         Work on this job · <b class="${done===list.length?'wl-all':''}">${done} of ${list.length} done</b>
-        ${canTick ? '' : `<span class="wl-lock">${stage==='SENT'?'take the job to start ticking':'only the person on this job can tick'}</span>`}
+        ${mineCount ? `<span class="wl-lock">${mineCount} line${mineCount===1?'':'s'} yours</span>` : ''}
+        ${blocked ? `<span class="wl-lock">kept for ${esc(t.assignedToName||'someone else')}</span>` : ''}
       </div>
-      ${list.map((c,i)=>`<label class="wl-item${c && c.d?' is-done':''}">
-        <input type="checkbox" data-tick="${esc(t.id)}" data-i="${i}" ${c && c.d?'checked':''} ${canTick?'':'disabled'}>
-        <span>${esc(c && c.t || 'Item')}</span>
-      </label>`).join('')}
+      ${list.map((c,i)=>{
+        const held  = c && c.by ? c.by : '';
+        const mine  = held === me.uid;
+        const other = held && !mine;
+        const canTick = (mine || owner) && !blocked;
+        return `<div class="wl-row${c && c.d?' is-done':''}">
+          <label class="wl-item${c && c.d?' is-done':''}">
+            <input type="checkbox" data-tick="${esc(t.id)}" data-i="${i}"
+                   ${c && c.d?'checked':''} ${canTick?'':'disabled'}>
+            <span>${esc(c && c.t || 'Item')}</span>
+          </label>
+          <div class="wl-who">
+            ${mine ? `<b class="wl-yours">yours</b>
+                      <button class="wl-drop" data-drop="${esc(t.id)}" data-i="${i}" type="button">let go</button>`
+              : other ? `<span>${esc(c.byName || 'taken')}</span>`
+              : blocked ? `<span class="wl-muted">—</span>`
+              : `<button class="wl-take" data-take="${esc(t.id)}" data-i="${i}" type="button">I'll do this</button>`}
+          </div>
+        </div>`;
+      }).join('')}
+      ${blocked ? '' : `<div class="wl-foot">Take the lines you're doing. Anything untaken is still up for grabs.</div>`}
     </div>`;
   }
 
@@ -1182,26 +1227,99 @@
   // Ticking one line off. Writes the whole `checklist` array plus a bumped `staffUpdate.rev`,
   // so the ledger applies it exactly once. `stage` is carried unchanged — the ledger keys on
   // staffUpdate.stage and would otherwise read the tick as a stage change and move the job.
+  // One entry, normalised. Every write goes through this so a claim can never drop a tick and
+  // a tick can never drop a claim — the whole array is rewritten each time, so any field this
+  // forgets is a field that silently disappears.
+  function wlEntry(c, over){
+    const base = {
+      t: (c && c.t) || '',
+      d: !!(c && c.d),
+      by: (c && c.by) || '',
+      byName: (c && c.byName) || ''
+    };
+    return Object.assign(base, over || {});
+  }
+  // Shared write for every checklist change. `stage` is carried unchanged unless the caller
+  // asks to move it, so the ledger cannot mistake a tick or a claim for a stage change.
+  async function writeChecklist(t, checklist, extra, okMsg){
+    const patch = Object.assign({
+      checklist,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      staffUpdate: {
+        stage: (extra && extra.stage) || t.stage || 'SENT',
+        by: me.uid,
+        byName: myName,
+        rev: (t.staffUpdate && Number(t.staffUpdate.rev) || 0) + 1,
+        at: new Date().toISOString()
+      }
+    }, extra || {});
+    await shopRef().collection('tasks').doc(t.id).update(patch);
+    if(okMsg) toast(okMsg);
+  }
+
+  // Taking one line. The first line anyone takes also moves the docket off SENT, because a job
+  // with work claimed on it is plainly no longer just sitting there — but `acceptedBy` is only
+  // stamped if nobody holds it yet, so the header keeps naming whoever got there first rather
+  // than flipping to the latest person to grab a line.
+  async function claimJobItem(id, i, btn){
+    const t = tasks.find(x=>x.id===id);
+    if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
+    if(t.checklist[i].by) return;                       // somebody beat us to it
+    // The reservation is re-checked here, not just in the markup. `assignedTo` isn't
+    // staff-writable, but `checklist` is, so without this a client could claim a line off a
+    // docket the owner put aside for someone else.
+    if(!!t.assignedTo && t.assignedTo !== me.uid && myRole !== 'owner') return;
+    btn.disabled = true;
+    const checklist = t.checklist.map((c,n)=> n===i
+      ? wlEntry(c, {by: me.uid, byName: myName})
+      : wlEntry(c));
+    const extra = {};
+    if((t.stage || 'SENT') === 'SENT'){
+      extra.stage = 'ACCEPTED';
+      if(!t.acceptedBy){
+        extra.acceptedBy = me.uid;
+        extra.acceptedByName = myName;
+        extra.acceptedAt = firebase.firestore.FieldValue.serverTimestamp();
+      }
+    }
+    try{
+      await writeChecklist(t, checklist, extra, 'That line is yours.');
+    }catch(err){
+      console.error('claim failed', err);
+      btn.disabled = false;
+      toast('Could not take that line. Check your connection.');
+    }
+  }
+
+  // Handing a line back, for when you picked up the wrong one. The tick goes with it — an
+  // unclaimed line reading "done" would be nobody's word for it.
+  async function dropJobItem(id, i, btn){
+    const t = tasks.find(x=>x.id===id);
+    if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
+    if(t.checklist[i].by !== me.uid && myRole !== 'owner') return;
+    btn.disabled = true;
+    const checklist = t.checklist.map((c,n)=> n===i
+      ? wlEntry(c, {by:'', byName:'', d:false})
+      : wlEntry(c));
+    try{
+      await writeChecklist(t, checklist, null, 'Line handed back — anyone can take it.');
+    }catch(err){
+      console.error('drop failed', err);
+      btn.disabled = false;
+      toast('Could not hand that line back. Check your connection.');
+    }
+  }
+
   async function tickJobItem(id, i, box){
     const t = tasks.find(x=>x.id===id);
     if(!t || !Array.isArray(t.checklist) || !t.checklist[i]) return;
     const wanted = box.checked;
     box.disabled = true;
-    const checklist = t.checklist.map((c,n)=> n===i ? {t:(c&&c.t)||'', d:wanted} : {t:(c&&c.t)||'', d:!!(c&&c.d)});
+    const checklist = t.checklist.map((c,n)=> n===i ? wlEntry(c, {d:wanted}) : wlEntry(c));
     try{
-      await shopRef().collection('tasks').doc(id).update({
-        checklist,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        staffUpdate: {
-          stage: t.stage || 'SENT',
-          by: me.uid,
-          byName: myName,
-          rev: (t.staffUpdate && Number(t.staffUpdate.rev) || 0) + 1,
-          at: new Date().toISOString()
-        }
-      });
       const done = checklist.filter(c=>c.d).length;
-      toast(done===checklist.length ? 'All work on this job ticked off.' : done+' of '+checklist.length+' done.');
+      await writeChecklist(t, checklist, null,
+        done===checklist.length ? 'All work on this job ticked off.' : done+' of '+checklist.length+' done.');
     }catch(err){
       console.error('tick failed', err);
       box.checked = !wanted;   // put it back — the write did not land

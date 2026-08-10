@@ -302,6 +302,10 @@
   .wl-item input:disabled{cursor:default;}
   .wl-item.is-done > span{text-decoration:line-through;color:var(--muted);}
   .wl-item > span{transition:color 160ms ease;}
+  /* Who took this line on the shop floor. Several people can hold different lines of one
+     docket, so the name belongs beside the work, not just at the top of the job. */
+  .wl-by{font-size:10px;color:var(--teal);text-decoration:none;white-space:nowrap;}
+  .wl-item.is-done .wl-by{color:var(--muted);}
   .kpi-drill{
     background:none;border:none;padding:0;cursor:pointer;
     font:inherit;color:inherit;
@@ -1618,7 +1622,12 @@
     return jobChecklistLines(j).map(t=>{
       const i = pool.findIndex(c=>c && c.t === t);
       const was = i >= 0 ? pool.splice(i,1)[0] : null;
-      return {t, d: was ? !!was.d : false};
+      // `by`/`byName` are who took this particular line on the shop floor. Several people can
+      // hold different lines of one docket, which is why the holder lives on the line rather
+      // than only on the job.
+      return {t, d: was ? !!was.d : false,
+              by: was && was.by ? was.by : '',
+              byName: was && was.byName ? was.byName : ''};
     });
   }
   function jobChecklistProgress(j){
@@ -1636,7 +1645,7 @@
     return `<div class="wl">${head}${list.map((c,i)=>`
       <label class="wl-item${c.d?' is-done':''}">
         <input type="checkbox" class="job-item-check" data-id="${j.id}" data-i="${i}" ${c.d?'checked':''} ${editable?'':'disabled'}>
-        <span>${esc(c.t)}</span>
+        <span>${esc(c.t)}${c.byName?` <span class="wl-by">${esc(c.byName)}</span>`:''}</span>
       </label>`).join('')}</div>`;
   }
 
@@ -2428,6 +2437,16 @@
   }
 
   // ---------- DASHBOARD ----------
+  // The four "today" figures at the top of the Dashboard are the same four that head the
+  // day sheet, and the day sheet can already open every one of them. Rather than build a
+  // second set of panels here, pressing one jumps to Daily View for today with that panel
+  // already open — so there stays exactly one implementation of each breakdown.
+  // Same dotted-underline affordance as `drill()`; a zero stays plain text, because
+  // opening an empty list teaches nothing.
+  function dashDrill(key, amount, hasDetail){
+    if(!hasDetail) return naira(amount);
+    return `<button class="kpi-drill dash-drill" data-key="${key}" title="See what this is made of, on Daily View">${naira(amount)}</button>`;
+  }
   function renderDashboard(){
     const m = monthStats();
     const late = overdueJobs();
@@ -2449,10 +2468,10 @@
     content.innerHTML = `
       ${renderMonthTargetCard()}
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi"><div class="num">${naira(m.todayBilled)}</div><div class="lbl">Billed Today</div></div>
-        <div class="lg-card lg-kpi paid"><div class="num">${naira(m.todayJobIncome)}</div><div class="lbl">Income for Today</div></div>
-        <div class="lg-card lg-kpi ${m.oldDebtPaidToday>0?'teal':''}"><div class="num">${naira(m.oldDebtPaidToday)}</div><div class="lbl">Total Old Debt</div></div>
-        <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(m.todayPaid)}</div><div class="lbl">Grand Total</div></div>
+        <div class="lg-card lg-kpi"><div class="num">${dashDrill('billed', m.todayBilled, m.todayBilled>0)}</div><div class="lbl">Billed Today</div></div>
+        <div class="lg-card lg-kpi paid"><div class="num">${dashDrill('income', m.todayJobIncome, m.todayJobIncome>0)}</div><div class="lbl">Income for Today</div></div>
+        <div class="lg-card lg-kpi ${m.oldDebtPaidToday>0?'teal':''}"><div class="num">${dashDrill('olddebt', m.oldDebtPaidToday, m.oldDebtPaidToday>0)}</div><div class="lbl">Total Old Debt</div></div>
+        <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${dashDrill('grand', m.todayPaid, m.todayPaid>0)}</div><div class="lbl">Grand Total</div></div>
       </div>
       <div class="lg-grid cols-4">
         <div class="lg-card lg-kpi teal"><div class="num">${naira(m.billed)}</div><div class="lbl">Billed This Month</div></div>
@@ -6177,10 +6196,15 @@
       // writes the checklist back to the task, so there is no loop.
       if(Array.isArray(t.checklist)){
         const fromFloor = t.checklist;
+        const own = Array.isArray(j.checklist) ? j.checklist : [];
         j.checklist = jobChecklistLines(j).map(label=>{
           const hit = fromFloor.find(c=>c && c.t === label);
-          const own = (Array.isArray(j.checklist)?j.checklist:[]).find(c=>c && c.t === label);
-          return {t: label, d: hit ? !!hit.d : (own ? !!own.d : false)};
+          const was = own.find(c=>c && c.t === label);
+          const src = hit || was;
+          return {t: label,
+                  d: src ? !!src.d : false,
+                  by: hit ? (hit.by||'') : (was && was.by ? was.by : ''),
+                  byName: hit ? (hit.byName||'') : (was && was.byName ? was.byName : '')};
         });
       }
       // ACCEPTED just claims the job; only the two production stages are real
@@ -6984,6 +7008,16 @@
       if(e.target.classList && e.target.classList.contains('goto-purchase-log')){
         e.preventDefault();
         state.tab = 'inventory';
+        renderAll();
+      }
+      // A "today" figure on the Dashboard opens on Daily View, where the breakdown panels
+      // already live. Delegated for the same reason as the rest: renderDashboard() binds no
+      // handlers of its own, and every other path that repaints it would have to remember to.
+      if(e.target.classList && e.target.classList.contains('dash-drill')){
+        e.preventDefault();
+        dayViewDate = todayISO();
+        dayOpenCard = e.target.dataset.key;
+        state.tab = 'dayview';
         renderAll();
       }
       // Delegated, because "send to staff" appears on job cards that a dozen
