@@ -4026,7 +4026,7 @@
       <div class="lg-row-actions" style="margin-top:6px;">
         <button class="subtle-link job-guide-toggle" data-id="${j.id}">what to do</button>
         ${t.debt>0 ? `<button class="subtle-link job-payment-toggle" data-id="${j.id}">record payment</button>` : ''}
-        <button class="subtle-link job-waste-toggle" data-id="${j.id}">record waste</button>
+        <button class="subtle-link job-waste-toggle" data-id="${j.id}">material used / wasted</button>
         <button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button>
         <button class="subtle-link job-send-staff" data-id="${j.id}">${j.staffTaskId?'on the floor':'send to staff'}</button>
         ${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener">notify</a>`:''}
@@ -4056,25 +4056,56 @@
       </div>` : ''}
     </div>`;
   }
+  // Material on an existing job — what it actually used, and what it spoiled. Material is
+  // often only known once the job runs, so New Job can't be the only place to enter it.
+  // Used and wasted live on the same line because they are the same measurement of the same
+  // stock; both come out of Net Profit and both feed the material purse.
   function renderWasteForm(j){
     const materials = jobMaterialsList(j);
-    const options = materials.length ? materials.map(m=>m.name) : [];
+    const t = jobTotals(j);
+    const row = (m,i)=>`<tr>
+      <td>${esc(m.name)}</td>
+      <td class="num-col">${m.qty||0}</td>
+      <td class="num-col ${Number(m.waste)>0?'flag':'muted'}">${m.waste||0}</td>
+      <td class="num-col">${naira(m.unitCost||0)}</td>
+      <td class="num-col">${naira(((Number(m.qty)||0)+(Number(m.waste)||0))*(Number(m.unitCost)||0))}</td>
+      <td><button class="subtle-link mat-remove" data-id="${j.id}" data-i="${i}">remove</button></td>
+    </tr>`;
     return `<div class="pay-form" data-id="${j.id}" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--rule);">
-      <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Record material that got spoiled/wasted on this job — paper jam, misprint, etc. This deducts from stock and counts as a cost, just like material actually used.</div>
-      <div class="lg-grid cols-2">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+        What this job consumed, and what it spoiled. Both come out of Net Profit and both are
+        charged into the <a href="#" class="goto-purchase-log" style="color:var(--teal);">material purse</a>
+        that pays for restocking. Unit cost is filled in from <b>Material Prices</b> — set it here if the
+        material is new and it will be remembered.
+      </div>
+      <div class="lg-grid cols-4">
         <div><label style="margin-top:0">Material</label>
-          <input class="waste-material" list="waste-material-list-${j.id}" placeholder="e.g. A4" value="${options[0]?esc(options[0]):''}">
+          <input class="waste-material" list="waste-material-list-${j.id}" placeholder="e.g. SAV">
           <datalist id="waste-material-list-${j.id}">${state.materials.map(m=>`<option value="${esc(m.name)}">`).join('')}</datalist>
         </div>
+        <div><label style="margin-top:0">Qty used</label><input class="mat-used-qty" type="number" min="0" value="0"></div>
         <div><label style="margin-top:0">Qty wasted</label><input class="waste-qty" type="number" min="0" value="0"></div>
+        <div><label style="margin-top:0">Unit cost (₦)</label><input class="mat-unitcost" type="number" min="0" placeholder="from Material Prices"></div>
       </div>
       <div class="lg-row-actions" style="margin-top:6px;">
-        <button class="lg-btn small waste-submit" data-id="${j.id}" type="button">Add Waste</button>
+        <button class="lg-btn small waste-submit" data-id="${j.id}" type="button">Add to this job</button>
         <button class="lg-btn ghost small waste-cancel" type="button">Cancel</button>
       </div>
-      ${materials.some(m=>Number(m.waste)>0) ? `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
-        Already recorded: ${materials.filter(m=>Number(m.waste)>0).map(m=>`${esc(m.name)} ×${m.waste}`).join(', ')}
-      </div>` : ''}
+      ${materials.length ? `<div style="margin-top:10px;">
+        <table><thead><tr>
+          <th>Material</th><th class="num-col">Used</th><th class="num-col">Wasted</th>
+          <th class="num-col">Unit cost</th><th class="num-col">Cost</th><th></th>
+        </tr></thead><tbody>
+        ${materials.map(row).join('')}
+        <tr style="font-weight:700;border-top:2px solid var(--ink);">
+          <td colspan="4">TOTAL ON THIS JOB</td>
+          <td class="num-col">${naira(t.materialUsedCost + t.materialWasteCost)}</td><td></td>
+        </tr>
+        </tbody></table>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">
+          ${naira(t.materialUsedCost)} used${t.materialWasteCost>0?` &middot; <span style="color:var(--clay);">${naira(t.materialWasteCost)} wasted</span>`:''}
+        </div>
+      </div>` : '<div class="lg-empty" style="margin-top:8px;">No material recorded on this job yet.</div>'}
     </div>`;
   }
   function renderCPForm(j){
@@ -4121,7 +4152,7 @@
             ? `<button class="owed-pay job-payment-toggle" data-id="${j.id}" title="Record a payment against this job">${naira(t.debt)}</button>`
             : (t.debt>0 ? naira(t.debt) : (t.credit>0?naira(-t.credit):naira(0)))
         }</td>
-        ${withActions?`<td class="lg-row-actions"><button class="subtle-link job-guide-toggle" data-id="${j.id}">what to do</button>${t.debt>0?`<button class="subtle-link job-payment-toggle" data-id="${j.id}">pay</button>`:''}<button class="subtle-link job-waste-toggle" data-id="${j.id}">waste</button><button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button><button class="subtle-link job-send-staff" data-id="${j.id}">${j.staffTaskId?'on the floor':'send to staff'}</button>${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener" title="Send this customer a status update on WhatsApp">notify</a>`:''}${(j.payments&&j.payments.length)?`<button class="subtle-link job-receipt" data-id="${j.id}">receipt</button>`:''}<button class="subtle-link job-delete" data-id="${j.id}">remove</button></td>`:''}
+        ${withActions?`<td class="lg-row-actions"><button class="subtle-link job-guide-toggle" data-id="${j.id}">what to do</button>${t.debt>0?`<button class="subtle-link job-payment-toggle" data-id="${j.id}">pay</button>`:''}<button class="subtle-link job-waste-toggle" data-id="${j.id}">material</button><button class="subtle-link job-cp-toggle" data-id="${j.id}">details</button><button class="subtle-link job-send-staff" data-id="${j.id}">${j.staffTaskId?'on the floor':'send to staff'}</button>${j.phone?`<a class="subtle-link" href="${waLink(j.phone, statusWaText(j))}" target="_blank" rel="noopener" title="Send this customer a status update on WhatsApp">notify</a>`:''}${(j.payments&&j.payments.length)?`<button class="subtle-link job-receipt" data-id="${j.id}">receipt</button>`:''}<button class="subtle-link job-delete" data-id="${j.id}">remove</button></td>`:''}
       </tr>
       ${withActions && openGuideId===j.id ? `<tr><td colspan="9" style="padding-top:0;">${renderGuideBlock(j)}</td></tr>` : ''}
       ${withActions && openPaymentId===j.id ? `<tr><td colspan="9" style="padding-top:0;">${renderPaymentForm(j)}</td></tr>` : ''}
@@ -4355,28 +4386,60 @@
       btn.addEventListener('click', async ()=>{
         const form = btn.closest('.pay-form');
         const materialName = form.querySelector('.waste-material').value.trim();
-        const qty = Number(form.querySelector('.waste-qty').value)||0;
+        const used  = Number(form.querySelector('.mat-used-qty').value)||0;
+        const waste = Number(form.querySelector('.waste-qty').value)||0;
+        const costIn = form.querySelector('.mat-unitcost').value;
+        const unitCostGiven = costIn === '' ? null : (Number(costIn)||0);
         if(!materialName){ toast('Enter a material name'); return; }
-        if(qty<=0){ toast('Enter a quantity greater than 0'); return; }
+        if(used<=0 && waste<=0){ toast('Enter a quantity used or wasted'); return; }
         const j = state.jobs.find(j=>j.id===btn.dataset.id);
         if(!j) return;
         j.materials = jobMaterialsList(j); // normalize old single-material jobs into the array format
         const key = normName(materialName);
+        const known = state.materials.find(mm=>normName(mm.name)===key);
+        // Price precedence: typed here, else the catalogue price, else nothing. A job stores its
+        // own unit cost, so repricing a material later never re-prices jobs already recorded.
+        const price = unitCostGiven !== null ? unitCostGiven : (known ? Number(known.unitCost)||0 : 0);
+        let materialsChanged = false;
         let m = j.materials.find(mm=>normName(mm.name)===key);
         if(m){
-          m.waste = (Number(m.waste)||0) + qty;
+          m.qty   = (Number(m.qty)||0) + used;
+          m.waste = (Number(m.waste)||0) + waste;
+          if(unitCostGiven !== null) m.unitCost = unitCostGiven;
         } else {
-          // material wasn't already on this job — look up its going rate so the cost is still counted
-          const known = state.materials.find(mm=>normName(mm.name)===key);
-          j.materials.push({name: materialName, qty:0, unitCost: known?known.unitCost:0, waste: qty});
-          if(!known){
-            state.materials.push({id: uid(), name: materialName, unit:'unit', unitCost:0, opening:0, restocked:0, reorderLevel:0});
-            await save('materials');
-          }
+          j.materials.push({name: materialName, qty: used, unitCost: price, waste: waste});
         }
+        if(!known){
+          // A material first seen on a job still has to appear on Inventory, or the stock
+          // figures quietly disagree with what the jobs say was consumed.
+          state.materials.push({id: uid(), name: materialName, unit:'unit',
+            unitCost: price, opening:0, restocked:0, purchases:[], reorderLevel:0});
+          materialsChanged = true;
+        } else if(unitCostGiven !== null && !(Number(known.unitCost)||0)){
+          // Fills a blank catalogue price only — never overwrites one already set on Material Prices.
+          known.unitCost = unitCostGiven;
+          materialsChanged = true;
+        }
+        await saveMany(materialsChanged ? ['jobs','materials'] : ['jobs']);
+        const bits = [];
+        if(used>0)  bits.push(used + ' used');
+        if(waste>0) bits.push(waste + ' wasted');
+        toast(materialName + ' - ' + bits.join(', '));
+        reRender();   // stays open, so several materials can be entered in one go
+      });
+    });
+    document.querySelectorAll('.mat-remove').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const j = state.jobs.find(x=>x.id===btn.dataset.id);
+        if(!j) return;
+        const list = jobMaterialsList(j);
+        const i = Number(btn.dataset.i);
+        if(!list[i]) return;
+        const gone = list[i].name;
+        list.splice(i,1);
+        j.materials = list;
         await save('jobs');
-        toast('Waste recorded — ' + materialName + ' \u00d7' + qty);
-        openWasteId = null;
+        toast('Removed ' + gone + ' from this job');
         reRender();
       });
     });
