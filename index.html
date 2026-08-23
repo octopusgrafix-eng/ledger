@@ -755,6 +755,30 @@
   // The key a customer is filed under. Named customers key on their own normalised name;
   // every anonymous variant collapses onto WALKIN.
   function custKey(name){ return isWalkin(name) ? WALKIN : normName(name); }
+
+  // Collapsing every walk-in into one bucket kept the money right but lost the sale: three
+  // counter jobs became one nameless record, and a debt on any of them had nothing attached
+  // to it. So a job taken in without a name now gets its own number instead — a real record
+  // per sale, traceable and chaseable, while the old shared bucket stays exactly as it is so
+  // history is never rewritten.
+  const WALKIN_PREFIX = 'Walk-in Customer ';
+  function walkinNumber(name){
+    const m = /^WALK[ -]?IN CUSTOMER (\d+)$/.exec(normName(name));
+    return m ? Number(m[1]) : 0;
+  }
+  // A counter sale either way — the legacy shared bucket, or a numbered one. Used to keep
+  // them out of the Top Customers ranking, which is about people you can sell to again.
+  function isCounterSale(name){ return isWalkin(name) || walkinNumber(name) > 0; }
+  // Next free number, taken from the highest already used anywhere. Scanning rather than
+  // keeping a counter means a deleted job never causes a reused number, and a restored
+  // backup can't collide with what's already here.
+  function nextWalkinName(){
+    let max = 0;
+    state.jobs.forEach(j=>{ const n = walkinNumber(j.customerName); if(n > max) max = n; });
+    state.quotes.forEach(q=>{ const n = walkinNumber(q.customerName); if(n > max) max = n; });
+    state.customers.forEach(c=>{ const n = walkinNumber(c.name); if(n > max) max = n; });
+    return WALKIN_PREFIX + (max + 1);
+  }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   // ---------- payment method (cash vs bank transfer) ----------
   // CP spends and expenses each carry ONE method. Job payments are different: a single
@@ -3114,7 +3138,7 @@
       const t = jobTotals(j);
       // Counter sales are money, not a customer — kept out of the ranking but reported
       // underneath it, so the total still reconciles with Billed This Month.
-      if(key === WALKIN){ walkinJobs += 1; walkinBilled += t.totalBilled; return; }
+      if(isCounterSale(j.customerName)){ walkinJobs += 1; walkinBilled += t.totalBilled; return; }
       if(!custMap.has(key)) custMap.set(key, {name:key, jobs:0, billed:0, debt:0});
       const e = custMap.get(key); e.jobs += 1; e.billed += t.totalBilled; e.debt += t.debt;
     });
@@ -3781,7 +3805,7 @@
       const rawTotalV = items.reduce((s,it)=>s+it.qty*it.unitPrice+it.descQty*it.descUnitPrice,0);
       const quote = {
         id: uid(),
-        customerName: document.getElementById('nj-customer').value.trim() || 'WALKIN',
+        customerName: document.getElementById('nj-customer').value.trim() || nextWalkinName(),
         phone: document.getElementById('nj-phone').value.trim(),
         dateCreated: todayISO(),
         validUntil: shiftDate(todayISO(), 14),
@@ -3807,7 +3831,7 @@
 
     document.getElementById('nj-save').addEventListener('click', async (e)=>{
       await withButtonGuard(e.currentTarget, 'Saving…', async ()=>{
-      const customerName = document.getElementById('nj-customer').value.trim() || 'WALKIN';
+      const customerName = document.getElementById('nj-customer').value.trim() || nextWalkinName();
       const items = draftItems.filter(it=>Number(it.qty)>0 || Number(it.descQty)>0).map(it=>({
         service: (it.service||'').trim() || 'ITEM', category: it.category||'', qty:Number(it.qty)||0, unit:(it.unit||'').trim(), unitPrice:Number(it.unitPrice)||0,
         desc:(it.desc||'').trim(), descQty:Number(it.descQty)||0, descUnit:(it.descUnit||'').trim(), descUnitPrice:Number(it.descUnitPrice)||0
@@ -4687,9 +4711,17 @@
       <div class="lg-card">
         <div class="lg-card-title">Customers (${rows.length})</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Old Debt" is money owed from before you were tracking it here \u2014 set it once, then record payments against it as customers pay it down. It's already folded into the Debt total.</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">
+          A job saved with the customer field empty is now filed as its own <b>${esc(WALKIN_PREFIX.trim())} N</b>,
+          marked <span class="stamp" style="background:var(--paper-deep);color:var(--muted);border:1px solid var(--rule);">COUNTER</span>
+          in the list below. Each counter sale keeps its own record, so a debt on one is still attached to
+          something. They stay out of the Dashboard's Best Customers ranking, which is about people you can
+          sell to again.
+        </div>
         ${walkin && walkin.jobCount ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">
-          Not listed below: <b>${walkin.jobCount} counter sale${walkin.jobCount===1?'':'s'}</b> totalling ${naira(walkin.totalBilled)}
-          \u2014 walk-ins with no name taken. Every naira of it still counts in Billed, Paid and Net Profit.${
+          Not listed below: <b>${walkin.jobCount} older counter sale${walkin.jobCount===1?'':'s'}</b> totalling ${naira(walkin.totalBilled)},
+          taken in before walk-ins were numbered and still sharing one nameless record. Every naira of it counts
+          in Billed, Paid and Net Profit.${
             walkin.totalDebt>0 ? ` <span style="color:var(--clay);">${naira(walkin.totalDebt)} of it was never paid, and with no name or number attached there is nobody to chase \u2014 worth writing off deliberately.</span>` : ''
           }</div>` : ''}
         ${!rows.length ? '<div class="lg-empty">No customers yet</div>' : `
@@ -4698,7 +4730,9 @@
           <th class="num-col">Old Debt Set</th><th class="num-col">Old Debt Left</th><th class="num-col">Total Debt</th><th>Last Job</th><th></th>
         </tr></thead><tbody>
         ${rows.map(c=>`<tr data-name="${esc(c.name)}">
-          <td>${esc(c.name)}</td>
+          <td>${esc(c.name)}${walkinNumber(c.name)
+            ? ' <span class="stamp" style="background:var(--paper-deep);color:var(--muted);border:1px solid var(--rule);">COUNTER</span>'
+            : ''}</td>
           <td><input type="tel" class="cu-phone-edit" data-name="${esc(c.name)}" value="${esc(c.phone)}" placeholder="080…" style="width:118px;" title="Add or correct this customer's number — for when it wasn't collected at intake"></td>
           <td class="num-col">${c.jobCount}</td>
           <td class="num-col">${naira(c.totalBilled)}</td>
