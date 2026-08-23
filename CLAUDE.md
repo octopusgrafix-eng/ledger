@@ -40,13 +40,26 @@ it. Merging deliberately once beats discovering the drift later.
 **Verify a deploy by diffing the live URL, never by checking the site loads.** A
 skipped Netlify build still returns HTTP 200 while serving a months-old file.
 
-**Never build a `YYYY-MM-DD` with `toISOString()`.** The shop is UTC+1, so local
-midnight is the *previous* day in UTC. `todayISO()` and `shiftDate()` both did this:
-"today" read as yesterday until 1am, and every prev/next-day button on Daily View,
-Jobs, Expenses and CP Account stepped two days back and none forward. Use `isoOf()`,
-which formats from local parts. The bug is invisible in a UTC-or-behind test
-environment — check `Intl.DateTimeFormat().resolvedOptions().timeZone` before
-concluding date arithmetic works.
+**Never build a `YYYY-MM-DD` *or a `YYYY-MM`* with `toISOString()`.** The shop is
+UTC+1, so local midnight is the *previous* day in UTC. `todayISO()` and
+`shiftDate()` both did this: "today" read as yesterday until 1am, and every
+prev/next-day button on Daily View, Jobs, Expenses and CP Account stepped two
+days back and none forward. Use `isoOf()`, which formats from local parts, or
+`todayISO().slice(0,7)` for a month.
+
+Fixing the day version left the **month** version alive in three places until
+9 Aug 2026 — `monthStats()`, the Dashboard income chart, and `renderStaff()` all
+did `now.toISOString().slice(0,7)`, so between local midnight and 1am on the 1st
+those three scoped to the previous month. Verified against a frozen clock at
+00:30 local on 1 Sep: UTC reports `2026-08`, all three now report September.
+`new Date().getFullYear()/getMonth()` are local and were always fine — it is only
+`toISOString()` that lies. Grep for it before assuming a date is safe.
+
+The bug is invisible in a UTC-or-behind test environment — check
+`Intl.DateTimeFormat().resolvedOptions().timeZone` before concluding date
+arithmetic works. The in-app browser does report `Africa/Lagos`, so it *can*
+reproduce these; freezing `window.Date` around a single call is enough to test
+the one-hour window.
 
 **The preview pane serves stale snapshots.** `navigate` and `location.reload()`
 both kept returning old bytes for several attempts; `preview_start` with the file
@@ -206,9 +219,35 @@ wasted. **Buying stock is not in that formula and never has been** — restockin
 is funded by the material purse, which collects the used + wasted charged onto
 each job. Stock purchases do reduce Net Cash, which is a cash-movement figure,
 not profit. Tithe/PF/EX are split off Net Profit, so anything that changes it
-changes the split: `dayStats()`, `monthStats()`, `targetStats()` and the Summary
-day table all compute it separately and must stay in step. Four copies of one
-formula; two of them have already drifted once.
+changes the split.
+
+**`monthDailyBuckets(year, month)` is now the single source of the daily
+figures.** It buckets one month by day and states the keying rules once:
+
+- billed / new debt / cost of production / material used / wasted → the day the
+  **job was taken in**
+- money paid (job payments + old-debt payments) → the day the **money came in**
+- stock bought / expenses → the day the **cash left the till**
+- `net` = `max(paid − cp − matUsed − matWaste, 0)`, **clamped per day**, because
+  that is what Tithe/PF/EX are split from and a day never splits a negative.
+
+`monthStats()` (Dashboard), `renderSummary()` (the day table) and
+`targetStats()` (both target cards) all read it. `dayStats()` is still the
+single-day version — it also assembles the payment lists the drill-downs need —
+and must keep matching. Sum-of-days is the invariant: verified that the
+Dashboard's Net Profit, the Summary's MONTH TOTAL, the sum of `dayStats()` over
+the month, and the target card's achieved figure all agree.
+
+They did not before 9 Aug 2026. `monthStats()` keyed payments to the day the
+**job** was taken in, so a July job paid in August landed in July there and in
+August everywhere else, and it summed unclamped so a loss-making day netted off
+a good one. On a four-transaction test month the Dashboard said ₦85,000 and the
+Summary ₦130,000. The same bug in miniature made "Income for Today" disagree
+with Daily View's job-payments figure; that's fixed by the same change.
+
+`collectionRate` is deliberately on a different basis from `paid` — it is "of
+what you billed this month, how much has been collected on those jobs", which is
+what pairs with `debt`. The Dashboard card is now labelled to say so.
 
 ## Conventions that have held
 
@@ -280,16 +319,26 @@ suspect the cache before the code.
 
 ## Open items
 
-- **The staff app needs `firestore.rules` published before it does anything.**
-  Then press *Open the shop floor* on the Team tab. Until the rules are live,
-  approving someone fails with a permission error the UI reports but can't fix.
-- **Untested against a real second account.** Every render path in both apps was
-  exercised against seeded data; the mirror logic was verified directly
+- **`firestore.rules` is published** (11 Aug 2026, project `oktopus-a48fa`, via the
+  console) and *Open the shop floor* on the Team tab works. The staff-writable key
+  set already covers everything both apps write to a task — `stage`, `acceptedBy*`,
+  `staffUpdate`, `staffNote`, `doneAt`, `updatedAt`, `checklist` — so line claims,
+  time estimates and ticks all ride inside `checklist` and need no rules change.
+  **Adding any other staff-writable field still means editing that `hasOnly([...])`
+  list and republishing**, or the write is rejected server-side with no clue in the
+  UI. Rules do not deploy with a git push.
+- **Still untested against a real second account.** Every render path in both apps
+  was exercised against seeded data; the mirror logic was verified directly
   (idempotent replay, stale-rev rejection, `ACCEPTED` not touching status); and
   the image shrinker was measured on real and worst-case inputs. What has *not*
-  run is a genuine two-account round trip: join request → approve → send a job →
-  accept → watch the ledger update. That needs a second Firebase account and
-  published rules. Do it once before the shop relies on it.
+  run is the rest of the round trip: join request → approve → send a job → claim a
+  line → put a time on it → tick it → watch the ledger update. Rules are no longer
+  the blocker; this just needs a second account. Do it once before the shop relies
+  on it.
+- **`firebase-storage-compat.js` is loaded but never used.** `firebase.storage()`
+  is called zero times in either file — pictures ride inside the Firestore document
+  as data URIs, by design. The script tag in `index.html` is dead weight and no
+  storage rules are needed.
 - **Cloud Storage was considered and rejected** (needs Blaze and a card).
   Cloudinary's free tier was the alternative if previews ever stop being enough —
   25GB, no card, but files become public-by-URL, which loses the membership
