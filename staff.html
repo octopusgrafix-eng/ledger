@@ -285,6 +285,36 @@
   .wl-drop{display:block;color:var(--muted);}
   .wl-take:active,.wl-drop:active{opacity:.6;}
   .wl-foot{font-size:10.5px;color:var(--muted);margin-top:6px;}
+
+  /* The "somebody said something" banner. Sits over everything, keeps pulsing until it is
+     opened or dismissed, and is sized to be readable across a workshop rather than glanced
+     at up close. Deliberately loud — a badge is what this replaces, because a badge loses. */
+  #msg-alert{
+    position:fixed; left:10px; right:10px; top:10px; z-index:800;
+    display:flex; align-items:center; gap:10px; justify-content:space-between;
+    background:var(--ok-deep); color:#F3F2FF; border-radius:8px;
+    padding:11px 13px; box-shadow:0 10px 30px rgba(0,0,0,.35);
+    animation:maPulse 1.1s ease-in-out infinite;
+  }
+  #msg-alert.hidden{display:none;}
+  #msg-alert .ma-body{min-width:0;}
+  #msg-alert .ma-who{font-size:11px; letter-spacing:1px; text-transform:uppercase; font-weight:700; opacity:.85;}
+  #msg-alert .ma-text{font-size:14px; line-height:1.4; margin-top:2px;
+    overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;}
+  #msg-alert .ma-acts{display:flex; align-items:center; gap:6px; flex:0 0 auto;}
+  #msg-alert .ma-open{background:#F3F2FF; color:var(--ok-deep); border:none; border-radius:5px;
+    padding:7px 12px; font-family:inherit; font-size:12.5px; font-weight:700; cursor:pointer;}
+  #msg-alert .ma-close{background:none; border:none; color:#F3F2FF; font-size:16px;
+    cursor:pointer; padding:4px 6px; opacity:.8;}
+  #msg-alert .ma-open:active,#msg-alert .ma-close:active{transform:scale(0.96);}
+  @keyframes maPulse{
+    0%,100%{box-shadow:0 10px 30px rgba(0,0,0,.35), 0 0 0 0 rgba(17,49,244,.55);}
+    50%    {box-shadow:0 10px 30px rgba(0,0,0,.35), 0 0 0 12px rgba(17,49,244,0);}
+  }
+  /* Reduced motion still gets the banner — it just stops throbbing. Losing the message
+     entirely would be the wrong accommodation. */
+  @media (prefers-reduced-motion: reduce){ #msg-alert{animation:none;} }
+  #btn-ring.is-muted{opacity:.45;}
   /* The line's own clock. Green while there's room, amber as it runs out, clay once it's over —
      the same three the rest of the app uses, so "late" reads the same here as everywhere else. */
   .wl-cd{display:block;font-variant-numeric:tabular-nums;font-weight:700;}
@@ -393,6 +423,7 @@
       <div class="n" id="top-shop">…</div>
       <div class="s"><span class="dot" id="top-dot"></span><span id="top-name">…</span></div>
     </div>
+    <button class="btn ghost small" id="btn-ring" type="button" title="Sound when a message arrives">🔔</button>
     <button class="btn ghost small hidden" id="btn-install" type="button">⤓ Install</button>
     <button class="btn ghost small" id="btn-signout" type="button">Sign out</button>
   </div>
@@ -402,6 +433,19 @@
   <!-- Chat gets its own permanent DOM: the message list is re-rendered on every
        snapshot, but the composer below is never touched, so a half-typed message
        survives incoming traffic. -->
+  <!-- Sits above everything and keeps pulsing until it is dealt with. A badge is easy to miss
+       across a workshop; this is meant to be seen from the far side of the room. -->
+  <div id="msg-alert" class="hidden" role="alert" aria-live="assertive">
+    <div class="ma-body">
+      <div class="ma-who" id="ma-who"></div>
+      <div class="ma-text" id="ma-text"></div>
+    </div>
+    <div class="ma-acts">
+      <button class="ma-open" id="ma-open" type="button">Open chat</button>
+      <button class="ma-close" id="ma-close" type="button" aria-label="Dismiss">✕</button>
+    </div>
+  </div>
+
   <div class="pane hidden" id="pane-chat">
     <div class="scroll" id="chat-scroll"></div>
     <div class="composer">
@@ -735,6 +779,18 @@
     subscribeAll();
     switchTab('chat');
     askNotifyPermission();
+    applyRingButton();
+    $('btn-ring').addEventListener('click', ()=>{
+      ringMuted = !ringMuted;
+      try{ localStorage.setItem('ok-staff-ring', ringMuted ? 'off' : 'on'); }catch(e){}
+      applyRingButton();
+      // Ringing once on unmute proves it works and sets the volume expectation, and the tap
+      // itself is the gesture that lets the audio context start.
+      if(!ringMuted){ primeAudio(); ring(); toast('Sound on'); }
+      else toast('Sound off');
+    });
+    $('ma-open').addEventListener('click', ()=>{ hideMsgAlert(); switchTab('chat'); });
+    $('ma-close').addEventListener('click', hideMsgAlert);
   }
 
   function renderTabs(){
@@ -755,7 +811,9 @@
   function switchTab(id){
     tab = id;
     ['chat','jobs','clock'].forEach(t => $('pane-'+t).classList.toggle('hidden', t!==id));
-    if(id==='chat'){ unread = 0; updateTitle(); scrollChatToEnd(true); }
+    // Reaching the chat is the same as acknowledging it — the banner and the flashing title
+    // have done their job and would only be in the way from here.
+    if(id==='chat'){ unread = 0; stopTitleFlash(); hideMsgAlert(); updateTitle(); scrollChatToEnd(true); }
     renderTabs();
     if(id==='jobs') renderJobs();
     if(id==='clock') renderClock();
@@ -807,8 +865,14 @@
         const d = ch.doc.data();
         if(d.from === me.uid) return;
         if(ch.doc.metadata.hasPendingWrites) return;
-        if(tab !== 'chat' || document.hidden){ unread++; }
+        const away = (tab !== 'chat' || document.hidden);
+        if(away){ unread++; }
         notify(d);
+        // Rings whether or not you're looking — someone across the shop needs to hear it.
+        ring();
+        // The banner is only for when you aren't already reading the chat; showing it over
+        // the conversation you're watching would just cover the message it announces.
+        if(away){ showMsgAlert(d); startTitleFlash(); }
       });
     }
     renderChat();
@@ -1676,6 +1740,101 @@
       });
       n.onclick = ()=>{ window.focus(); n.close(); };
     }catch(e){}
+  }
+
+  // ============================================================
+  //  the ring, and the banner that won't be ignored
+  // ============================================================
+  //
+  // A desktop notification is invisible if the phone is in an apron pocket and the app is
+  // already open. So an arriving message does three things: rings, drops a pulsing banner
+  // over the app, and flashes the title for anyone whose tab is in the background.
+  //
+  // The ring is synthesised rather than loaded from a file. There is no build step here and
+  // no file storage, and a two-tone chime is a dozen lines of WebAudio — cheaper than
+  // shipping an mp3 and it cannot 404.
+  let ringMuted = false;
+  try{ ringMuted = localStorage.getItem('ok-staff-ring') === 'off'; }catch(e){}
+  let audioCtx = null;
+  function ring(){
+    if(ringMuted) return;
+    try{
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return;
+      if(!audioCtx) audioCtx = new AC();
+      // Browsers park the context until a gesture. Resume is a no-op once it's running.
+      if(audioCtx.state === 'suspended') audioCtx.resume();
+      const now = audioCtx.currentTime;
+      // Two notes, second higher — reads as "ding-dong" rather than an error buzz.
+      [[880, 0], [1174.7, 0.13]].forEach(([hz, at])=>{
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = hz;
+        // Ramped, not switched: an abrupt stop on a sine wave clicks.
+        gain.gain.setValueAtTime(0.0001, now + at);
+        gain.gain.exponentialRampToValueAtTime(0.32, now + at + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.42);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start(now + at);
+        osc.stop(now + at + 0.45);
+      });
+    }catch(e){}
+  }
+  // The context can only be created inside a gesture on most browsers, so the first tap
+  // anywhere primes it. Without this the very first message of a session rings silently.
+  function primeAudio(){
+    try{
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return;
+      if(!audioCtx) audioCtx = new AC();
+      if(audioCtx.state === 'suspended') audioCtx.resume();
+    }catch(e){}
+  }
+  document.addEventListener('click', primeAudio, {once:true});
+  document.addEventListener('touchstart', primeAudio, {once:true});
+
+  // Flashes the tab title while unread messages are waiting and the tab isn't in front.
+  let titleFlip = null, titleOn = false;
+  function startTitleFlash(){
+    if(titleFlip) return;
+    titleFlip = setInterval(()=>{
+      if(!document.hidden || unread<=0){ stopTitleFlash(); return; }
+      titleOn = !titleOn;
+      document.title = titleOn ? '💬 New message' : '('+unread+') Oktopus Staff';
+    }, 900);
+  }
+  function stopTitleFlash(){
+    if(titleFlip){ clearInterval(titleFlip); titleFlip = null; }
+    titleOn = false;
+    updateTitle();
+  }
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) stopTitleFlash(); });
+
+  let alertHideTimer = null;
+  function showMsgAlert(d){
+    const bar = $('msg-alert');
+    if(!bar) return;
+    $('ma-who').textContent = (d.fromName || 'Someone') + ' says';
+    $('ma-text').textContent = d.text || (d.attachment ? '📎 sent a file' : '');
+    bar.classList.remove('hidden');
+    // It keeps pulsing for a good while rather than sliding away after three seconds —
+    // the point is that it survives being walked away from. Opening or dismissing clears it.
+    clearTimeout(alertHideTimer);
+    alertHideTimer = setTimeout(()=>bar.classList.add('hidden'), 60000);
+  }
+  function hideMsgAlert(){
+    clearTimeout(alertHideTimer);
+    const bar = $('msg-alert');
+    if(bar) bar.classList.add('hidden');
+  }
+  function applyRingButton(){
+    const b = $('btn-ring');
+    if(!b) return;
+    b.textContent = ringMuted ? '🔕' : '🔔';
+    b.classList.toggle('is-muted', ringMuted);
+    b.title = ringMuted ? 'Sound is off — tap to turn it back on'
+                        : 'Sound is on when a message arrives — tap to mute';
   }
 
   // ============================================================
