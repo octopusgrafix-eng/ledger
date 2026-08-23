@@ -4063,10 +4063,37 @@
       ${openCPId===j.id ? renderCPForm(j) : ''}
     </div>`;
   }
+  // The line under the discount box: subtotal, what's coming off, and what's left to collect.
+  // Clamped the same way jobTotals() clamps, so what the form promises is what gets stored.
+  function paySumsText(rawTotal, discount, paid){
+    const d = Math.min(Math.max(Number(discount)||0, 0), rawTotal);
+    const billed = rawTotal - d;
+    const owed = Math.max(billed - paid, 0);
+    const credit = Math.max(paid - billed, 0);
+    return `Subtotal ${naira(rawTotal)}${d>0?` &minus; discount ${naira(d)}`:''} = <b>${naira(billed)}</b><br>`
+         + `Paid ${naira(paid)} &middot; ${credit>0
+              ? `<b style="color:var(--teal);">credit ${naira(credit)}</b>`
+              : `still owed <b style="color:${owed>0?'var(--clay)':'var(--green)'};">${naira(owed)}</b>`}`;
+  }
+
+  // Taking payment is when a discount actually gets agreed — "round it down to five thousand"
+  // happens at the counter, not when the job was booked in. So the discount is editable here,
+  // and the running total updates as it is typed rather than only after saving.
   function renderPaymentForm(j){
     const t = jobTotals(j);
     return `<div class="pay-form" data-id="${j.id}" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--rule);">
-      <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Balance owed: ${naira(t.debt)}</div>
+      <div class="lg-grid cols-2">
+        <div><label style="margin-top:0">Discount (₦)</label>
+          <input class="pay-discount" type="number" min="0" max="${t.rawTotal}" value="${t.discount||0}"
+                 title="Taken off the whole job, not off this payment">
+        </div>
+        <div><label style="margin-top:0">&nbsp;</label>
+          <div class="pay-sums" data-raw="${t.rawTotal}" data-paid="${t.totalPaid}"
+               style="font-size:11.5px;line-height:1.6;color:var(--muted);padding-top:6px;">
+            ${paySumsText(t.rawTotal, t.discount, t.totalPaid)}
+          </div>
+        </div>
+      </div>
       <div class="lg-grid cols-2">
         <div><label style="margin-top:0">Cash</label><input class="pay-cash" type="number" min="0" value="0"></div>
         <div><label style="margin-top:0">Bank</label><input class="pay-bank" type="number" min="0" value="0"></div>
@@ -4372,22 +4399,48 @@
         await showReceipt(j, (Number(last.cash)||0)+(Number(last.bank)||0), {cash:Number(last.cash)||0, bank:Number(last.bank)||0});
       });
     });
+    // Typing in the discount box rewrites only the summary line beside it. A re-render here
+    // would take the field away mid-keystroke, which is the oldest trap in this file.
+    document.querySelectorAll('.pay-discount').forEach(inp=>{
+      inp.addEventListener('input', ()=>{
+        const form = inp.closest('.pay-form');
+        const sums = form && form.querySelector('.pay-sums');
+        if(!sums) return;
+        sums.innerHTML = paySumsText(Number(sums.dataset.raw)||0, inp.value, Number(sums.dataset.paid)||0);
+      });
+    });
     document.querySelectorAll('.pay-submit').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const form = btn.closest('.pay-form');
         const cash = Number(form.querySelector('.pay-cash').value)||0;
         const bank = Number(form.querySelector('.pay-bank').value)||0;
-        if(cash<=0 && bank<=0){ toast('Enter a cash or bank amount'); return; }
         const j = state.jobs.find(j=>j.id===btn.dataset.id);
         if(!j) return;
-        j.payments = j.payments || [];
-        j.payments.push({date: todayISO(), cash, bank, note:'Payment'});
+        const t = jobTotals(j);
+        const dInput = form.querySelector('.pay-discount');
+        // Clamped to the subtotal: a discount bigger than the job would invert the bill.
+        const newDiscount = dInput ? Math.min(Math.max(Number(dInput.value)||0, 0), t.rawTotal) : t.discount;
+        const discountChanged = newDiscount !== t.discount;
+        // A discount on its own is a real edit — "knock ₦500 off, they'll pay Friday" — so it
+        // saves without a payment. Only refuse when nothing at all was entered.
+        if(cash<=0 && bank<=0 && !discountChanged){ toast('Enter a cash or bank amount, or change the discount'); return; }
+        if(discountChanged) j.discount = newDiscount;
+        if(cash>0 || bank>0){
+          j.payments = j.payments || [];
+          j.payments.push({date: todayISO(), cash, bank, note:'Payment'});
+        }
         recomputeAllCustomers();
         await saveMany(['jobs','customers']);
-        toast('Payment recorded — ' + naira(cash+bank));
-        openPaymentId = null;
-        reRender();
-        await showReceipt(j, cash+bank, {cash, bank});
+        if(cash>0 || bank>0){
+          toast('Payment recorded — ' + naira(cash+bank) + (discountChanged?' · discount '+naira(newDiscount):''));
+          openPaymentId = null;
+          reRender();
+          // Applied before the receipt is drawn, so the customer's copy shows the agreed price.
+          await showReceipt(j, cash+bank, {cash, bank});
+        } else {
+          toast('Discount set — ' + naira(newDiscount));
+          reRender();   // stays open: a discount is usually followed by taking the money
+        }
       });
     });
   }
