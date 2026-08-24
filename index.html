@@ -7481,6 +7481,49 @@
     // Bridge for the Refresh button, which lives inside the app's own closure and can't
     // see `reg`. Resolves 'updating' once a new worker has been told to take over — the
     // existing controllerchange handler does the reload from there.
+    // Most deploys change index.html and nothing else. reg.update() only ever looks for a new
+    // WORKER, so on those deploys it correctly reports "current" while the worker keeps serving
+    // a months-old shell from cache — the button then swears the app is up to date and the fix
+    // the owner is looking for is nowhere on screen. So when no new worker is found, the shell
+    // itself is compared as well.
+    //
+    // The comparison has to go around the worker to mean anything: a plain fetch of the shell
+    // is intercepted and answered from the same cache we are trying to check. A cache-busted
+    // URL misses that cache entry and reaches the network, which is what makes this honest.
+    function shellChanged(){
+      if(!('caches' in window)) return Promise.resolve(false);
+      var cacheRef = null, freshRes = null;
+      return caches.keys()
+        .then(function(names){
+          var n = names.filter(function(x){ return x.indexOf('daybook-') === 0; })[0];
+          if(!n) return null;
+          return caches.open(n);
+        })
+        .then(function(c){
+          if(!c) return null;
+          cacheRef = c;
+          return fetch('./index.html?shellcheck=' + Date.now(), {cache:'reload'});
+        })
+        .then(function(res){
+          if(!res || !res.ok) return null;
+          freshRes = res;
+          return res.clone().text();
+        })
+        .then(function(freshText){
+          if(freshText == null) return false;
+          return cacheRef.match('./index.html').then(function(oldRes){
+            if(!oldRes) return false;
+            return oldRes.text().then(function(oldText){
+              if(oldText === freshText) return false;
+              // Store it under the key navigations are served from, so the reload gets the new
+              // one rather than racing the background revalidation.
+              return cacheRef.put('./index.html', freshRes).then(function(){ return true; });
+            });
+          });
+        })
+        .catch(function(){ return false; });
+    }
+
     window.__lgCheckUpdate = function(){
       return reg.update()
         .then(function(){ return waitForWaiting(reg, 8000); })
@@ -7489,7 +7532,12 @@
             worker.postMessage({type:'SKIP_WAITING'});
             return 'updating';
           }
-          return 'current';
+          // No new worker — check whether the page itself moved on.
+          return shellChanged().then(function(changed){
+            if(!changed) return 'current';
+            setTimeout(function(){ location.reload(); }, 400);
+            return 'updating';
+          });
         })
         .catch(function(){ return 'error'; });
     };
