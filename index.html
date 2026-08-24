@@ -2291,7 +2291,24 @@
     tick();
   }
 
-  // ---------- monthly target ----------
+  // ---------- monthly target (SWITCHED OFF) ----------
+  //
+  // The whole target feature is currently hidden: the card on the Dashboard, the card on
+  // Daily View, and the setup card on Summary are all removed. The machinery below still
+  // works and is deliberately kept, because the owner expects to set a target again later.
+  //
+  // To bring it back, three edits and nothing else:
+  //   1. renderDashboard()  — restore `${renderMonthTargetCard()}`
+  //   2. renderDayView()    — restore `${dayViewDate===todayISO() ? renderDayTargetCard() : ''}`
+  //   3. renderSummary()    — restore the "Monthly Target" card and its sm-save-target handler
+  // The stored settings (monthlyTarget, targetBasis, targetWorksSundays) were never cleared,
+  // so whatever was last set comes straight back. Nothing here affects any other figure —
+  // targetStats() only reads.
+  //
+  // Why it went: the carried-forward daily figure compounds all month, and against a slow
+  // month it ran into the millions, which is not a number anyone can act on. If it returns,
+  // decide first whether the carry should reset weekly rather than run the whole month.
+  //
   // The target is measured against the same net profit the Split card divides up —
   // cash collected, less cost of production, less the material actually used — so the
   // number here can never disagree with the number on the Summary tab.
@@ -2539,7 +2556,7 @@
     const reorder = state.materials.filter(mt =>
       Number(mt.reorderLevel||0)>0 && materialRemaining(mt, usage) <= Number(mt.reorderLevel||0));
     content.innerHTML = `
-      ${renderMonthTargetCard()}
+      ${''/* Monthly target card removed — see the note above targetStats(). */}
       <div class="lg-grid cols-4">
         <div class="lg-card lg-kpi"><div class="num">${dashDrill('billed', m.todayBilled, m.todayBilled>0)}</div><div class="lbl">Billed Today</div></div>
         <div class="lg-card lg-kpi paid"><div class="num">${dashDrill('income', m.todayJobIncome, m.todayJobIncome>0)}</div><div class="lbl">Income for Today</div></div>
@@ -2903,7 +2920,7 @@
   function renderDayView(){
     const d = dayStats(dayViewDate);
     content.innerHTML = `
-      ${dayViewDate===todayISO() ? renderDayTargetCard() : ''}
+      ${''/* Today's target card removed — see the note above targetStats(). */}
       <div class="lg-card">
         <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
           <div><label style="margin-top:0">Date</label><input id="dv-date" type="date" value="${dayViewDate}"></div>
@@ -3394,30 +3411,6 @@
         <div style="margin-top:10px;"><button class="lg-btn ghost small" id="sm-save-split">Save Split</button></div>
       </div>
 
-      <div class="lg-card">
-        <div class="lg-card-title">Monthly Target</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
-          What you're aiming to make this month. It's split into a weekly and a daily
-          number for you, and shown on the Daily View so you see it every morning.
-        </div>
-        <div class="lg-grid cols-3">
-          <div><label style="margin-top:0">Target for the month (₦)</label><input id="sm-target" type="number" min="0" value="${Number(s.monthlyTarget)||0}"></div>
-          <div><label style="margin-top:0">Count towards it</label>
-            <select id="sm-target-basis">
-              <option value="pf"${s.targetBasis!=='net'?' selected':''}>PF only — your ${Number(s.pfPct)||0}% share</option>
-              <option value="net"${s.targetBasis==='net'?' selected':''}>The whole net profit</option>
-            </select>
-          </div>
-          <div><label style="margin-top:0">Working days</label>
-            <select id="sm-target-sundays">
-              <option value="no"${!s.targetWorksSundays?' selected':''}>Mon–Sat (closed Sunday)</option>
-              <option value="yes"${s.targetWorksSundays?' selected':''}>Every day, including Sunday</option>
-            </select>
-          </div>
-        </div>
-        <div style="margin-top:10px;"><button class="lg-btn ghost small" id="sm-save-target" type="button">Save Target</button></div>
-      </div>
-
       <div class="lg-grid cols-3">
         <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600">${(collectionRate*100).toFixed(1)}%</div></div>
         <div class="lg-card"><div class="lg-card-title">Debt as % of Billing</div><div style="font-size:20px;font-weight:600">${(debtPct*100).toFixed(1)}%</div></div>
@@ -3522,16 +3515,6 @@
       state.settings.exPct = Number(document.getElementById('sm-ex').value)||0;
       await save('settings');
       toast('Split settings saved');
-      renderSummary();
-    });
-    document.getElementById('sm-save-target').addEventListener('click', async ()=>{
-      const t = Number(document.getElementById('sm-target').value)||0;
-      state.settings.monthlyTarget = t;
-      state.settings.targetBasis = document.getElementById('sm-target-basis').value;
-      state.settings.targetWorksSundays = document.getElementById('sm-target-sundays').value === 'yes';
-      await save('settings');
-      const st = targetStats();
-      toast(t ? `Target set — ${naira(st.dailyTarget)} a day over ${st.workDaysTotal} working days` : 'Target cleared');
       renderSummary();
     });
   }

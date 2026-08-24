@@ -345,7 +345,15 @@ suspect the cache before the code.
   gating the current design has for free.
 - **Netlify (`oktopusaccount.netlify.app`) is frozen** on a pre-sign-in build,
   out of credits. Kept deliberately. Revival steps are in the README.
-- **The monthly target is ₦8,450,000 on the PF basis**, set 6 Aug 2026. It encodes
+- **The target feature is switched off** (24 Aug 2026) at the owner's request —
+  "we might set it later". All three visible pieces are gone: the Dashboard card,
+  the Daily View card, and the Summary setup card with its `sm-save-target`
+  handler. `targetStats()`, both card renderers and the CSS are deliberately kept,
+  and the removal does **not** depend on the stored figure, so nothing had to be
+  written to live data. Restoring it is the three edits listed in the comment above
+  `targetStats()`. Read the next item first if it comes back.
+- **The monthly target was ₦8,450,000 on the PF basis**, set 6 Aug 2026 and still
+  stored, so it returns as-is if the cards are restored. It encodes
   "₦500,000 of net profit per working day": 26 working days × ₦500k = ₦13m net,
   × 65% = ₦8.45m. Because the app divides by the *current* month's working days
   (24–27 across 2026), a fixed target drifts the daily figure — ₦8.45m is ₦500k/day
