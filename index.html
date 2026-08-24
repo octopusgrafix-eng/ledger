@@ -304,6 +304,37 @@
   .wl-item > span{transition:color 160ms ease;}
   /* Who took this line on the shop floor. Several people can hold different lines of one
      docket, so the name belongs beside the work, not just at the top of the job. */
+  /* The customer roster carries ten columns. On a desktop that is a table; on a phone it is
+     732px of table inside a 351px card, so everything but the name sits off-screen behind a
+     sideways scroll nobody finds. Below 760px each row becomes a block instead: the name as a
+     heading, then label-and-figure pairs that wrap. Same markup, same data, no scrolling. */
+  @media(max-width:760px){
+    .cu-table thead{display:none;}
+    /* Beats `.lg-card table{min-width:560px}` further down, which is what was forcing this
+       table wider than the phone and pushing every column but the name off-screen. */
+    .lg-card .cu-table{min-width:0;width:100%;}
+    .cu-table, .cu-table tbody, .cu-table tr, .cu-table td{display:block;width:auto;}
+    .cu-table tr{
+      border:1px solid var(--rule); border-radius:4px;
+      padding:9px 11px; margin-bottom:9px; background:var(--paper);
+    }
+    .cu-table td{border:none; padding:3px 0; text-align:left;}
+    /* The name leads the block, so it needs no label and gets the weight instead. */
+    .cu-table td:first-child{
+      font-weight:700; font-size:14px; padding-bottom:6px; margin-bottom:4px;
+      border-bottom:1px dotted var(--rule);
+    }
+    .cu-table td[data-label]{display:flex; justify-content:space-between; align-items:center; gap:12px;}
+    .cu-table td[data-label]::before{
+      content:attr(data-label);
+      font-size:10.5px; letter-spacing:1px; text-transform:uppercase; color:var(--muted);
+      flex:0 0 auto;
+    }
+    /* An empty cell would otherwise render as a stray label with nothing beside it. */
+    .cu-table td:empty{display:none;}
+    .cu-table td input{width:auto; max-width:150px; text-align:right;}
+    .cu-table td.num-col{text-align:right;}
+  }
   .wl-by{font-size:10px;color:var(--teal);text-decoration:none;white-space:nowrap;}
   .wl-item.is-done .wl-by{color:var(--muted);}
   /* The clock the floor put on this line, read back here. Clay once it's over the time they
@@ -4800,7 +4831,7 @@
             walkin.totalDebt>0 ? ` <span style="color:var(--clay);">${naira(walkin.totalDebt)} of it was never paid, and with no name or number attached there is nobody to chase \u2014 worth writing off deliberately.</span>` : ''
           }</div>` : ''}
         ${!rows.length ? '<div class="lg-empty">No customers yet</div>' : `
-        <table><thead><tr>
+        <table class="cu-table"><thead><tr>
           <th>Name</th><th>Phone</th><th class="num-col">Jobs</th><th class="num-col">Billed</th><th class="num-col">Paid</th>
           <th class="num-col">Old Debt Set</th><th class="num-col">Old Debt Left</th><th class="num-col">Total Debt</th><th>Last Job</th><th></th>
         </tr></thead><tbody>
@@ -4808,12 +4839,12 @@
           <td>${esc(c.name)}${walkinNumber(c.name)
             ? ' <span class="stamp" style="background:var(--paper-deep);color:var(--muted);border:1px solid var(--rule);">COUNTER</span>'
             : ''}</td>
-          <td><input type="tel" class="cu-phone-edit" data-name="${esc(c.name)}" value="${esc(c.phone)}" placeholder="080…" style="width:118px;" title="Add or correct this customer's number — for when it wasn't collected at intake"></td>
-          <td class="num-col">${c.jobCount}</td>
-          <td class="num-col">${naira(c.totalBilled)}</td>
-          <td class="num-col">${naira(c.totalPaid)}</td>
-          <td class="num-col"><input type="number" class="cu-olddebt-edit" data-name="${esc(c.name)}" value="${c.openingDebt}" style="width:90px;text-align:right;" title="The debt this customer owed before you started using this ledger. Editable."></td>
-          <td class="num-col ${c.openingDebtRemaining>0?'flag':''}">${
+          <td data-label="Phone"><input type="tel" class="cu-phone-edit" data-name="${esc(c.name)}" value="${esc(c.phone)}" placeholder="080…" style="width:118px;" title="Add or correct this customer's number — for when it wasn't collected at intake"></td>
+          <td class="num-col" data-label="Jobs">${c.jobCount}</td>
+          <td class="num-col" data-label="Billed">${naira(c.totalBilled)}</td>
+          <td class="num-col" data-label="Paid">${naira(c.totalPaid)}</td>
+          <td class="num-col" data-label="Old debt set"><input type="number" class="cu-olddebt-edit" data-name="${esc(c.name)}" value="${c.openingDebt}" style="width:90px;text-align:right;" title="The debt this customer owed before you started using this ledger. Editable."></td>
+          <td class="num-col" data-label="Old debt left" style="${c.openingDebtRemaining>0?'color:var(--clay);font-weight:600;':''}">${
             // Same idea as the owed figure on the jobs table: the amount still outstanding
             // is itself the way to settle it, rather than a link in the last column that
             // scrolls off-screen on a phone.
@@ -4821,7 +4852,7 @@
               ? `<button class="owed-pay cu-olddebt-toggle" data-name="${esc(c.name)}" title="Record a payment against this customer's old debt">${naira(c.openingDebtRemaining)}</button>`
               : '<span class="muted">—</span>'
           }</td>
-          <td class="num-col ${c.totalDebt>0?'flag':''}">${
+          <td class="num-col" data-label="Total debt" style="${c.totalDebt>0?'color:var(--clay);font-weight:600;':''}">${
             // Total Debt is job debt + old debt. Job debt belongs to individual jobs and
             // can't be settled as one lump from here, so this opens that customer's jobs
             // where each owed amount is itself payable — rather than being a dead figure.
@@ -4829,7 +4860,7 @@
               ? `<button class="owed-pay cu-jobdebt-goto" data-name="${esc(c.name)}" title="See this customer's jobs and record a payment">${naira(c.totalDebt)}</button>`
               : naira(c.totalDebt)
           }</td>
-          <td>${fmtDate(c.lastDate)}</td>
+          <td data-label="Last job">${fmtDate(c.lastDate)}</td>
           <td>${c.openingDebtRemaining>0?`<button class="subtle-link cu-olddebt-toggle" data-name="${esc(c.name)}">pay old debt</button>`:''}</td>
         </tr>
         ${openOldDebtId===c.name ? `<tr><td colspan="10" style="padding-top:0;">${renderOldDebtForm(c)}</td></tr>` : ''}
