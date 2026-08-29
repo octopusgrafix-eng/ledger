@@ -187,6 +187,11 @@
     text-transform:uppercase;letter-spacing:0.6px;color:var(--muted);
     border-bottom:2px solid var(--ink);padding:6px 8px;
   }
+  /* A single unbroken run of characters — a name typed by leaning on a key, a pasted URL — has
+     no wrap point, so the column grows to fit it and every other column is pushed off the far
+     side of the screen. One junk customer name did exactly that to the whole roster. Allowing a
+     break anywhere costs nothing on real text, which still wraps at spaces first. */
+  td, th{overflow-wrap:anywhere;}
   td{padding:7px 8px;border-bottom:1px solid var(--rule);vertical-align:top;}
   tr:hover td{background:rgba(185,121,28,0.06);}
   .num-col{text-align:right;font-variant-numeric:tabular-nums;}
