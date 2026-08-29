@@ -22,7 +22,11 @@
  * Bump CACHE_VERSION whenever the cached asset list changes.
  */
 
-const CACHE_VERSION = 'v4';
+// v5: bumped to force every installed app off a stale shell. The asset list did not change,
+// but a run of deploys touched only index.html, and a worker that has not itself changed keeps
+// serving the shell it cached — so the app kept showing an older page while reporting itself up
+// to date. Changing this constant installs a new worker, which is what actually shifts it.
+const CACHE_VERSION = 'v5';
 const CACHE_NAME = 'daybook-' + CACHE_VERSION;
 
 const SHELL_URL = './index.html';
