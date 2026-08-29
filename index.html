@@ -4902,7 +4902,15 @@
               : naira(c.totalDebt)
           }</td>
           <td data-label="Last job">${fmtDate(c.lastDate)}</td>
-          <td>${c.openingDebtRemaining>0?`<button class="subtle-link cu-olddebt-toggle" data-name="${esc(c.name)}">pay old debt</button>`:''}</td>
+          <td class="lg-row-actions">
+            ${c.openingDebtRemaining>0?`<button class="subtle-link cu-olddebt-toggle" data-name="${esc(c.name)}">pay old debt</button>`:''}
+            ${/* Only offered where it means anything. A customer with jobs is rebuilt from those
+                  jobs on the next render, so removing the row would achieve nothing but a flicker
+                  — the way to lose that customer is to remove their jobs. */''}
+            ${c.jobCount===0
+              ? `<button class="subtle-link cu-remove" data-name="${esc(c.name)}" title="Remove this name from the roster">remove</button>`
+              : ''}
+          </td>
         </tr>
         ${openOldDebtId===c.name ? `<tr><td colspan="11" style="padding-top:0;">${renderOldDebtForm(c)}</td></tr>` : ''}
         `).join('')}
@@ -4989,6 +4997,31 @@
     document.querySelectorAll('.cu-olddebt-toggle').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         openOldDebtId = (openOldDebtId===btn.dataset.name) ? null : btn.dataset.name;
+        renderCustomers();
+      });
+    });
+    // Removing a roster entry. Only ever offered where jobCount is 0, so no job, payment or
+    // naira of billing can be attached to what is being deleted — the row is a name and,
+    // sometimes, an old-debt figure. That figure is the one thing here that is real money, so
+    // it is named in the confirmation rather than disappearing quietly.
+    document.querySelectorAll('.cu-remove').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const name = btn.dataset.name;
+        const c = state.customers.find(x=>custKey(x.name)===custKey(name));
+        if(!c) return;
+        const owed = Number(c.openingDebt)||0;
+        const paidOff = (c.openingDebtPayments||[]).reduce((s,p)=>s+(Number(p.cash)||0)+(Number(p.bank)||0),0);
+        const left = Math.max(owed - paidOff, 0);
+        const msg = left > 0
+          ? `Remove ${name} from the roster?\n\nThey have no jobs, but ${naira(left)} of old debt is recorded against this name. Removing it deletes that record — the money stops being owed to you anywhere in the ledger.\n\nThere is no undo.`
+          : `Remove ${name} from the roster?\n\nThey have no jobs and no debt recorded, so nothing but the name is lost.`;
+        if(!confirm(msg)) return;
+        state.customers = state.customers.filter(x=>custKey(x.name)!==custKey(name));
+        // Rebuilt straight away: anyone still named on a job comes back, which is the check
+        // that this can never quietly detach a customer from work they actually did.
+        recomputeAllCustomers();
+        await saveMany(['customers']);
+        toast('Removed ' + name);
         renderCustomers();
       });
     });
