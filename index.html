@@ -3081,10 +3081,23 @@
 
   // ---------- SUMMARY (monthly, day-by-day — mirrors the day-sheet totals) ----------
   function daysInMonth(year, month){ return new Date(year, month+1, 0).getDate(); }
+  // Which month the Summary is showing. It was hard-wired to the current one, so on the 1st
+  // the previous month's day-by-day table became unreachable — the only way to keep it was to
+  // remember to export a CSV before midnight.
+  let summaryMonth = todayISO().slice(0,7);
+  // Month arithmetic from local parts. Going through toISOString() here would land on the
+  // previous month for the first hour of every 1st, which is the same trap as the date buttons.
+  function shiftMonth(ym, delta){
+    const bits = String(ym).split('-').map(Number);
+    const d = new Date(bits[0], (bits[1]-1) + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
   function renderSummary(){
     recomputeAllCustomers();
-    const now = new Date();
-    const year = now.getFullYear(), month = now.getMonth();
+    const ymBits = String(summaryMonth).split('-').map(Number);
+    const year = ymBits[0], month = ymBits[1] - 1;
+    const now = new Date(year, month, 1);
+    const isThisMonth = summaryMonth === todayISO().slice(0,7);
     const nDays = daysInMonth(year, month);
     const s = state.settings;
     const pad = n=>String(n).padStart(2,'0');
@@ -3323,6 +3336,18 @@
     const avgMs = timed.length ? timed.reduce((s,x)=>s+x.ms,0)/timed.length : null;
 
     content.innerHTML = `
+      <div class="lg-card">
+        <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
+          <div><label style="margin-top:0">Month</label><input id="sm-month" type="month" value="${summaryMonth}"></div>
+          <button class="lg-btn ghost small" id="sm-prev-month" type="button">◀ Prev month</button>
+          <button class="lg-btn ghost small" id="sm-this-month" type="button" ${isThisMonth?'disabled':''}>This month</button>
+          <button class="lg-btn ghost small" id="sm-next-month" type="button">Next month ▶</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">
+          Every figure on this tab is for <b>${monthLabel}</b>${isThisMonth?'':' — a month that has already closed'}.
+          The purses on CP Account, Expenses and Inventory are not monthly and are unaffected by this.
+        </div>
+      </div>
       <div class="lg-card">
         <div class="lg-card-title">Cash vs Bank Transfer, day by day — ${monthLabel}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
@@ -3568,6 +3593,13 @@
       }
       downloadCSV(`summary-${year}-${pad(month+1)}.csv`, rows);
     });
+    document.getElementById('sm-month').addEventListener('change', (e)=>{
+      summaryMonth = e.target.value || todayISO().slice(0,7);
+      renderSummary();
+    });
+    document.getElementById('sm-prev-month').addEventListener('click', ()=>{ summaryMonth = shiftMonth(summaryMonth,-1); renderSummary(); });
+    document.getElementById('sm-next-month').addEventListener('click', ()=>{ summaryMonth = shiftMonth(summaryMonth, 1); renderSummary(); });
+    document.getElementById('sm-this-month').addEventListener('click', ()=>{ summaryMonth = todayISO().slice(0,7); renderSummary(); });
     document.getElementById('sm-save-split').addEventListener('click', async ()=>{
       state.settings.tithePct = Number(document.getElementById('sm-tithe').value)||0;
       state.settings.pfPct = Number(document.getElementById('sm-pf').value)||0;
