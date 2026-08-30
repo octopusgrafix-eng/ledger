@@ -721,7 +721,7 @@
     exadjust: [],
     quotes: [],
     recurring: [],
-    settings: {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
+    settings: {tithePct:0, pfPct:70, exPct:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
     tab: 'dayview',
     loaded: false,
   };
@@ -1001,7 +1001,7 @@
   }
 
   const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
-  const DEFAULT_SETTINGS = {tithePct:10, pfPct:65, exPct:25, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
+  const DEFAULT_SETTINGS = {tithePct:0, pfPct:70, exPct:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
     // instead of eleven. The document is the signed-in user's uid, which is what the
@@ -1576,7 +1576,7 @@
     if(hasData){
       const wantsBackup = confirm(
         'This deletes every job, customer, material, and expense — permanently, on this device. ' +
-        'Your shop name/phone/address and Tithe/PF/EX split percentages are kept as-is (just settings, not monthly data). ' +
+        'Your shop name/phone/address and PF/EX split percentages are kept as-is (just settings, not monthly data). ' +
         'There is no undo.\n\nClick OK to download a backup FIRST (recommended), or Cancel to stop and not delete anything.'
       );
       if(!wantsBackup) return;
@@ -1589,7 +1589,7 @@
         title: 'Clear all data',
         warning: `Backup downloaded. This now <b>permanently deletes</b> ${state.jobs.length} job${state.jobs.length===1?'':'s'},
                   ${state.customers.length} customer${state.customers.length===1?'':'s'}, and every material, expense and
-                  purse record. Your shop details and Tithe/PF/EX percentages are kept. There is no undo.`,
+                  purse record. Your shop details and PF/EX percentages are kept. There is no undo.`,
         confirmLabel: 'Delete everything'
       });
       if(!reallyDelete) return;
@@ -2129,7 +2129,7 @@
   //   paid  (job payments + old-debt payments)    → the day the MONEY actually came in
   //   matBought / expenses                        → the day the cash left the till
   //   net = max(paid − cp − matUsed − matWaste, 0), clamped PER DAY, because that is the
-  //         figure Tithe/PF/EX are split from and a day never splits a negative.
+  //         figure PF/EX are split from and a day never splits a negative.
   //
   // `days` is a null-prototype map, so an undefined or hostile date key can't match.
   function monthDailyBuckets(year, month){
@@ -2861,7 +2861,7 @@
       return dayPanel(`What made up the ${naira(total)} of material ${wasted?'wasted':'used'} — ${day}`,
         `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
            ${wasted
-             ? 'Material spoiled on this day’s jobs, valued at today’s price. It comes out of Net Profit exactly like material used, so it also shrinks the Tithe/PF/EX split.'
+             ? 'Material spoiled on this day’s jobs, valued at today’s price. It comes out of Net Profit exactly like material used, so it also shrinks the PF/EX split.'
              : 'Material consumed by this day’s jobs, valued at today’s price. It comes out of Net Profit and is charged into the material purse, which is what pays for restocking.'}
          </div>` +
         dayTable([{label:'Customer'},{label:'Job'},{label:'Material'},{label:wasted?'Wasted':'Used',num:1},{label:'Unit cost',num:1},{label:'Cost',num:1}],
@@ -2905,7 +2905,7 @@
       return dayPanel(`How the ${naira(shown)} ${profit?'net profit':'net cash'} was worked out — ${day}`,
         `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
            ${profit
-             ? 'What the day actually earned. Buying stock is not in this — restocking is paid out of the material purse, not out of profit. Tithe/PF/EX are taken off this figure.'
+             ? 'What the day actually earned. Buying stock is not in this — restocking is paid out of the material purse, not out of profit. PF/EX are taken off this figure.'
              : 'How much more cash you hold than you started with. This is money movement, not earnings — buying stock takes cash out without being a loss.'}
          </div>
          <div style="overflow-x:auto;"><table><tbody>
@@ -2923,7 +2923,7 @@
            and nothing is split off it.</td></tr>` : ''}
          </tbody></table></div>
          ${profit ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;">
-           Split off this: tithe ${naira(d.tithe)} · PF ${naira(d.pf)} · EX ${naira(d.ex)}.</div>` : ''}`,
+           Split off this: PF ${naira(d.pf)} · EX ${naira(d.ex)}.</div>` : ''}`,
         profit?'var(--green)':'var(--ok-blue)');
     }
     return '';
@@ -3017,8 +3017,8 @@
       </div>
       ${dayPanelFor('three', d)}
       <div class="lg-card">
-        <div class="lg-card-title">Split \u2014 Tithe (${state.settings.tithePct}%) / PF (${state.settings.pfPct}%) / EX (${state.settings.exPct}%)</div>
-        <div style="font-size:16px;font-weight:600;">${naira(d.tithe)} &nbsp;/&nbsp; ${naira(d.pf)} &nbsp;/&nbsp; ${naira(d.ex)}</div>
+        <div class="lg-card-title">Split \u2014 PF (${state.settings.pfPct}%) / EX (${state.settings.exPct}%)</div>
+        <div style="font-size:16px;font-weight:600;">${naira(d.pf)} &nbsp;/&nbsp; ${naira(d.ex)}</div>
       </div>
 
       <div class="lg-card">
@@ -3149,7 +3149,7 @@
           <td class="num-col">${naira(acc.billed)}</td><td class="num-col">${naira(acc.paid)}</td>
           <td class="num-col">${naira(acc.newDebt)}</td><td class="num-col">${naira(acc.matCostUsed)}</td>
           <td class="num-col">${naira(acc.matWaste)}</td><td class="num-col">${naira(acc.grand)}</td>
-          <td class="num-col">${naira(acc.tithe)}</td><td class="num-col">${naira(acc.pf)}</td>
+          <td class="num-col">${naira(acc.pf)}</td>
           <td class="num-col">${naira(acc.ex)}</td><td></td>
         </tr>`;
       }
@@ -3164,14 +3164,14 @@
             <td class="num-col muted">${naira(r.matCostUsed)}</td>
             <td class="num-col ${r.matWaste>0?'flag':'muted'}">${naira(r.matWaste)}</td>
             <td class="num-col">${naira(r.grand)}</td>
-            <td class="num-col">${naira(r.tithe)}</td><td class="num-col">${naira(r.pf)}</td><td class="num-col">${naira(r.ex)}</td>
+            <td class="num-col">${naira(r.pf)}</td><td class="num-col">${naira(r.ex)}</td>
             <td class="num-col">${naira(r.cumDebt)}</td>
           </tr>`;
         }
         acc.billed+=r.billed; acc.paid+=r.paid; acc.newDebt+=r.newDebt; acc.grand+=r.grand; acc.tithe+=r.tithe; acc.pf+=r.pf; acc.ex+=r.ex; acc.matCostUsed+=r.matCostUsed; acc.matWaste+=r.matWaste;
       });
       html += flush();
-      return html || `<tr><td colspan="11" class="lg-empty">No jobs logged yet this month</td></tr>`;
+      return html || `<tr><td colspan="10" class="lg-empty">No jobs logged yet this month</td></tr>`;
     }
 
     function buildIncomeExpenseTable(){
@@ -3486,12 +3486,18 @@
       </div>
 
       <div class="lg-card">
-        <div class="lg-card-title">Split Settings — applied to each day's Net Profit (cash collected minus cost of production and material cost used)</div>
-        <div class="lg-grid cols-3">
-          <div><label style="margin-top:0">Tithe %</label><input id="sm-tithe" type="number" min="0" max="100" value="${s.tithePct}"></div>
+        <div class="lg-card-title">Split Settings — applied to each day's Net Profit (cash collected minus cost of production and material used and wasted)</div>
+        <div class="lg-grid cols-2">
           <div><label style="margin-top:0">PF %</label><input id="sm-pf" type="number" min="0" max="100" value="${s.pfPct}"></div>
           <div><label style="margin-top:0">EX %</label><input id="sm-ex" type="number" min="0" max="100" value="${s.exPct}"></div>
         </div>
+        ${(Number(s.pfPct)||0) + (Number(s.exPct)||0) !== 100 ? `<div style="font-size:11px;color:var(--clay);margin-top:8px;font-weight:600;">
+          PF and EX come to ${(Number(s.pfPct)||0) + (Number(s.exPct)||0)}% — ${
+            (Number(s.pfPct)||0)+(Number(s.exPct)||0) < 100
+              ? `${100 - ((Number(s.pfPct)||0)+(Number(s.exPct)||0))}% of every day's profit is being split to nowhere.`
+              : `that is more profit than the day made.`
+          } Set them to total 100 and save.
+        </div>` : ''}
         <div style="margin-top:10px;"><button class="lg-btn ghost small" id="sm-save-split">Save Split</button></div>
       </div>
 
@@ -3503,11 +3509,11 @@
 
       <div class="lg-card">
         <div class="lg-card-title">${monthLabel} — Daily &amp; Weekly Summary</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Paid" reflects the date money actually came in — including later payments against old debt — not just the day the job was taken in. "Net Profit" = Paid minus that day's cost of production minus "Mat. Used" (material actually used on that day's jobs) minus "Mat. Wasted" (material spoiled on them), which is what Tithe/PF/EX are split from. Money spent buying stock never reduces Net Profit — restocking is paid out of the material purse on the <b>Inventory</b> tab, which collects the Mat. Used and Mat. Wasted charged on every job.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">"Paid" reflects the date money actually came in — including later payments against old debt — not just the day the job was taken in. "Net Profit" = Paid minus that day's cost of production minus "Mat. Used" (material actually used on that day's jobs) minus "Mat. Wasted" (material spoiled on them), which is what PF/EX are split from. Money spent buying stock never reduces Net Profit — restocking is paid out of the material purse on the <b>Inventory</b> tab, which collects the Mat. Used and Mat. Wasted charged on every job.</div>
         <div style="overflow-x:auto;"><table><thead><tr>
           <th>Day</th><th class="num-col">Billed</th><th class="num-col">Paid</th><th class="num-col">New Debt</th>
           <th class="num-col">Mat. Used</th><th class="num-col">Mat. Wasted</th>
-          <th class="num-col">Net Profit</th><th class="num-col">Tithe (${s.tithePct}%)</th><th class="num-col">PF (${s.pfPct}%)</th><th class="num-col">EX (${s.exPct}%)</th><th class="num-col">Cum. Debt</th>
+          <th class="num-col">Net Profit</th><th class="num-col">PF (${s.pfPct}%)</th><th class="num-col">EX (${s.exPct}%)</th><th class="num-col">Cum. Debt</th>
         </tr></thead><tbody>
         ${buildDailyWeeklyTable()}
         <tr style="font-weight:700;border-top:2px solid var(--ink);">
@@ -3517,7 +3523,7 @@
           <td class="num-col">${naira(mMatCostUsed)}</td>
           <td class="num-col ${mMatWaste>0?'flag':''}">${naira(mMatWaste)}</td>
           <td class="num-col">${naira(mGrand)}</td>
-          <td class="num-col">${naira(mTithe)}</td><td class="num-col">${naira(mPf)}</td><td class="num-col">${naira(mEx)}</td>
+          <td class="num-col">${naira(mPf)}</td><td class="num-col">${naira(mEx)}</td>
           <td class="num-col">${naira(cumDebt)}</td>
         </tr>
         </tbody></table></div>
@@ -3583,13 +3589,13 @@
     document.getElementById('sm-export-jobs').addEventListener('click', ()=>exportJobsCSV(state.jobs.slice().sort((a,b)=>(a.dateReceived||'').localeCompare(b.dateReceived||'')), 'all-jobs'));
     document.getElementById('sm-export-customers').addEventListener('click', exportCustomersCSV);
     document.getElementById('sm-export-summary').addEventListener('click', ()=>{
-      const rows = [['Day','Billed','Paid','New Debt','Material Used','Material Wasted','Net Profit',`Tithe ${s.tithePct}%`,`PF ${s.pfPct}%`,`EX ${s.exPct}%`,'Expenses','Cost of Production']];
+      const rows = [['Day','Billed','Paid','New Debt','Material Used','Material Wasted','Net Profit',`PF ${s.pfPct}%`,`EX ${s.exPct}%`,'Expenses','Cost of Production']];
       for(let d=1; d<=nDays; d++){
         const date = dateFor(d);
         const st = dayStats(date);
         if(!st.billed && !st.paid && !st.expenseTotal && !st.cp) continue;
         rows.push([date, plainNum(st.billed), plainNum(st.paid), plainNum(st.newDebt), plainNum(st.matCostUsed), plainNum(st.matWasteCost),
-          plainNum(st.netProfit), plainNum(st.tithe), plainNum(st.pf), plainNum(st.ex), plainNum(st.expenseTotal), plainNum(st.cp)]);
+          plainNum(st.netProfit), plainNum(st.pf), plainNum(st.ex), plainNum(st.expenseTotal), plainNum(st.cp)]);
       }
       downloadCSV(`summary-${year}-${pad(month+1)}.csv`, rows);
     });
@@ -3601,11 +3607,17 @@
     document.getElementById('sm-next-month').addEventListener('click', ()=>{ summaryMonth = shiftMonth(summaryMonth, 1); renderSummary(); });
     document.getElementById('sm-this-month').addEventListener('click', ()=>{ summaryMonth = todayISO().slice(0,7); renderSummary(); });
     document.getElementById('sm-save-split').addEventListener('click', async ()=>{
-      state.settings.tithePct = Number(document.getElementById('sm-tithe').value)||0;
       state.settings.pfPct = Number(document.getElementById('sm-pf').value)||0;
       state.settings.exPct = Number(document.getElementById('sm-ex').value)||0;
+      // Tithe is no longer part of the split. Zeroing it on every save clears whatever figure
+      // was stored from before, so a percentage that is no longer shown anywhere can never sit
+      // in the settings quietly laying claim to part of a day's profit.
+      state.settings.tithePct = 0;
       await save('settings');
-      toast('Split settings saved');
+      const total = state.settings.pfPct + state.settings.exPct;
+      toast(total === 100
+        ? `Split saved — PF ${state.settings.pfPct}% / EX ${state.settings.exPct}%`
+        : `Split saved, but PF and EX come to ${total}% — check them`);
       renderSummary();
     });
   }
@@ -6027,7 +6039,7 @@
   // A running "production purse", kept deliberately separate from Expenses and from the
   // profit maths. Each day the CP of that day's jobs drops into the purse, you log what you
   // actually spent producing the work, and whatever is left carries into the next day.
-  // Nothing here touches Net Profit, Net Cash, or the Tithe/PF/EX split — this is a
+  // Nothing here touches Net Profit, Net Cash, or the PF/EX split — this is a
   // cash-in-hand tracker for production money, and it answers one question: is the money
   // still in the purse, and where did the rest of it go?
   let cpViewDate = todayISO();
@@ -6145,7 +6157,7 @@
           <button class="lg-btn ghost small" id="cp-nav-next" type="button">Next day \u25b6</button>
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:8px;">
-          The production purse for ${fmtDate(cpViewDate)}. It runs on its own \u2014 nothing here changes Net Profit, Net Cash, or the Tithe/PF/EX split, and it's separate from the Expenses tab.
+          The production purse for ${fmtDate(cpViewDate)}. It runs on its own \u2014 nothing here changes Net Profit, Net Cash, or the PF/EX split, and it's separate from the Expenses tab.
         </div>
       </div>
 
