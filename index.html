@@ -651,6 +651,7 @@
           <button class="lg-btn ghost small" id="lg-refresh-btn" type="button" title="Save now, reconnect live sync, and check for a new version of the app">⟳ Refresh</button>
           <button class="lg-btn ghost small" id="lg-backup-btn" type="button" title="Download all your data as a file you can keep safe">⬇ Backup</button>
           <button class="lg-btn ghost small" id="lg-restore-btn" type="button" title="Load a backup file back in">⬆ Restore</button>
+          <button class="lg-btn ghost small" id="lg-newbook-btn" type="button" title="Clear the trading — jobs, debts, expenses, purses, stock — but keep your price list, material rates and customer names">📕 Start New Book</button>
           <button class="lg-btn danger small" id="lg-clear-btn" type="button" title="Wipe everything and start fresh">🗑 Clear All Data</button>
           <button class="lg-btn ghost small" id="lg-signout" type="button" title="Sign out of this device">Sign Out</button>
           <input type="file" id="lg-restore-file" accept="application/json" style="display:none;">
@@ -1571,6 +1572,70 @@
     toast('Backup restored');
     renderAll();
   }
+  // Closing the test book and opening the real one. Clear All Data was the only reset, and it
+  // takes the price list, the material rates and the customer roster with it — a month of setup
+  // that has nothing to do with the test trading being thrown away. This keeps what was built
+  // and clears what was traded.
+  //
+  // Kept:    price list, material names/units/rates/reorder levels, customer names and phones,
+  //          shop details, the PF/EX split, recurring jobs.
+  // Cleared: every job (so every naira of job debt), old debt on every customer, expenses,
+  //          CP and expense spending and adjustments, quotes, all stock purchases and the usage
+  //          history, and all three purse floats and start dates.
+  async function startNewBook(){
+    const jobCount = state.jobs.length;
+    const debt = state.customers.reduce((s,c)=>s+(Number(c.totalDebt)||0), 0);
+    const wantsBackup = confirm(
+      'Starting a new book clears the trading and keeps the setup.\n\n' +
+      `CLEARED: all ${jobCount} job${jobCount===1?'':'s'} and the debt on them, every customer's old debt, ` +
+      'expenses, CP and expense spending, quotes, stock purchases and usage, and all three purses.\n\n' +
+      'KEPT: your price list, material names and rates, customer names and phone numbers, shop details ' +
+      'and the PF/EX split.\n\nThere is no undo.\n\n' +
+      'Click OK to download a backup FIRST (recommended), or Cancel to stop and change nothing.'
+    );
+    if(!wantsBackup) return;
+    if(!downloadBackup()){ toast('Cancelled — backup could not be created'); return; }
+    const ok = await requirePassword({
+      title: 'Start a new book',
+      warning: `Backup downloaded. This now <b>permanently clears</b> ${jobCount} job${jobCount===1?'':'s'}${
+        debt>0 ? ` carrying ${naira(debt)} of debt` : ''}, every customer's old debt, all expenses, both
+        spending logs, and all three purses. Your price list, material rates and customer names stay.
+        There is no undo.`,
+      confirmLabel: 'Clear the trading'
+    });
+    if(!ok) return;
+
+    state.jobs = [];
+    state.expenses = [];
+    state.cpspend = [];
+    state.cpadjust = [];
+    state.exadjust = [];
+    state.quotes = [];
+    // The roster survives, but nobody carries a balance into a new book. The derived totals are
+    // rebuilt from jobs anyway; it is openingDebt and its payment history that actually store money.
+    state.customers = state.customers.map(c=>({
+      name: c.name, phone: c.phone || '',
+      jobCount:0, totalBilled:0, totalPaid:0, totalDebt:0, lastDate:'',
+      openingDebt:0, openingDebtPayments:[]
+    }));
+    // The catalogue stays, the stock does not: a name and a rate are setup, a quantity on the
+    // shelf is trading. Opening stock is left at zero for them to count in fresh.
+    state.materials = state.materials.map(m=>({
+      id: m.id, name: m.name, unit: m.unit || 'unit', unitCost: Number(m.unitCost)||0,
+      opening: 0, restocked: 0, purchases: [], reorderLevel: Number(m.reorderLevel)||0
+    }));
+    state.settings = Object.assign({}, state.settings, {
+      receiptCounter: 0,
+      cpOpeningFloat: 0, cpStartDate: '',
+      exOpeningFloat: 0, exStartDate: '',
+      matOpeningFloat: 0, matStartDate: ''
+    });
+    await saveMany(['jobs','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','settings']);
+    toast('New book started — price list, material rates and customer names kept');
+    state.tab = 'dayview';
+    renderAll();
+  }
+
   async function clearAllData(){
     const hasData = state.jobs.length || state.customers.length || state.materials.length || state.expenses.length || state.cpspend.length;
     if(hasData){
@@ -7434,6 +7499,7 @@
       if(file) await restoreBackup(file);
       e.target.value = '';
     });
+    document.getElementById('lg-newbook-btn').addEventListener('click', startNewBook);
     document.getElementById('lg-clear-btn').addEventListener('click', clearAllData);
     root.addEventListener('click', (e)=>{
       if(e.target.classList && e.target.classList.contains('goto-purchase-log')){
