@@ -722,7 +722,7 @@
     exadjust: [],
     quotes: [],
     recurring: [],
-    settings: {tithePct:0, pfPct:70, exPct:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
+    settings: {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
     tab: 'dayview',
     loaded: false,
   };
@@ -1002,7 +1002,7 @@
   }
 
   const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
-  const DEFAULT_SETTINGS = {tithePct:0, pfPct:70, exPct:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
+  const DEFAULT_SETTINGS = {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
     // instead of eleven. The document is the signed-in user's uid, which is what the
@@ -2197,18 +2197,56 @@
   //         figure PF/EX are split from and a day never splits a negative.
   //
   // `days` is a null-prototype map, so an undefined or hostile date key can't match.
+  // ---------- the accounting period ----------
+  //
+  // The shop runs a fixed-length cycle rather than the calendar month — a run of days starting
+  // on an anchor date and repeating. Everything that used to say "this month" on the Dashboard,
+  // the Summary and the Staff tab now means "this period".
+  //
+  // The purses are deliberately NOT period-scoped. CP, Expenses and Material run continuously
+  // and carry their balance across any boundary; their day tables stay on calendar months,
+  // which is only a way of paging through days.
+  function periodLen(){ return Math.max(1, Math.round(Number(state.settings.periodDays)||30)); }
+  function periodAnchor(){ return state.settings.periodStart || todayISO(); }
+  function daysApart(a, b){
+    const da = new Date(a+'T00:00:00'), db = new Date(b+'T00:00:00');
+    if(isNaN(da) || isNaN(db)) return 0;
+    // Rounded, because a DST shift would otherwise leave a fractional day.
+    return Math.round((db - da) / 86400000);
+  }
+  // Periods before the anchor come out negative, which is what makes stepping backwards past
+  // the first one work rather than clamping at zero.
+  function periodIndexOf(dateStr){ return Math.floor(daysApart(periodAnchor(), dateStr) / periodLen()); }
+  function periodStartOf(index){ return shiftDate(periodAnchor(), index * periodLen()); }
+  function periodEndOf(index){ return shiftDate(periodStartOf(index), periodLen() - 1); }
+  function currentPeriodIndex(){ return periodIndexOf(todayISO()); }
+  function periodDatesOf(index){
+    const out = [];
+    let d = periodStartOf(index);
+    for(let i=0; i<periodLen(); i++){ out.push(d); d = shiftDate(d, 1); }
+    return out;
+  }
+  function periodLabel(index){ return `${fmtDate(periodStartOf(index))} – ${fmtDate(periodEndOf(index))}`; }
+
+  function periodDailyBuckets(index){ return dailyBuckets(periodDatesOf(index)); }
   function monthDailyBuckets(year, month){
     const nDays = daysInMonth(year, month);
     const pad = n=>String(n).padStart(2,'0');
     const ym = `${year}-${pad(month+1)}`;
+    const dates = [];
+    for(let d=1; d<=nDays; d++) dates.push(`${ym}-${pad(d)}`);
+    return dailyBuckets(dates);
+  }
+  // Buckets any run of days. Was hard-wired to a calendar month; the only month-specific part
+  // was building the date list, so that moved out and everything else is unchanged.
+  function dailyBuckets(dates){
     const days = Object.create(null);
     const order = [];
-    for(let d=1; d<=nDays; d++){
-      const date = `${ym}-${pad(d)}`;
-      days[date] = {date, day:d, billed:0, newDebt:0, cp:0, matUsed:0, matWaste:0,
+    dates.forEach((date, i)=>{
+      days[date] = {date, day:i+1, billed:0, newDebt:0, cp:0, matUsed:0, matWaste:0,
                     paid:0, jobIncome:0, oldDebtPaid:0, matBought:0, expenses:0, net:0};
       order.push(date);
-    }
+    });
     state.jobs.forEach(j=>{
       const t = jobTotals(j);
       const b = days[j.dateReceived];
@@ -2245,18 +2283,18 @@
       b.net = Math.max(b.paid - b.cp - b.matUsed - b.matWaste, 0);
       return b;
     });
-    return {ym, nDays, days, order, list};
+    return {nDays: order.length, days, order, list,
+            from: order[0] || '', to: order[order.length-1] || ''};
   }
   // Adds up one field across every day of a bucketed month.
   function bucketTotal(list, field){ return list.reduce((s,b)=>s+b[field], 0); }
 
   function monthStats(){
     recomputeAllCustomers();
-    const now = new Date();
-    // Local parts, never toISOString() — the shop is UTC+1, so between local midnight and
-    // 1am on the 1st the UTC month is still the previous one. See isoOf().
-    const ym = todayISO().slice(0,7);
-    const bk = monthDailyBuckets(now.getFullYear(), now.getMonth());
+    // Scoped to the current accounting period, not the calendar month. Every "(Month)" figure
+    // on the Dashboard is really "this period" and is labelled with its dates.
+    const pi = currentPeriodIndex();
+    const bk = periodDailyBuckets(pi);
     const L = bk.list;
 
     const billed         = bucketTotal(L,'billed');
@@ -2280,7 +2318,7 @@
     // Deliberately a different basis from `paid`: "of the value we billed this month, how
     // much has been collected on those jobs" — which is what pairs with `debt` above.
     // It is a job-based ratio, not a cash-in-the-month one, and is labelled as such.
-    const monthJobs = state.jobs.filter(j => (j.dateReceived||'').slice(0,7) === ym);
+    const monthJobs = state.jobs.filter(j => !!bk.days[j.dateReceived||'']);
     const paidOnMonthJobs = monthJobs.reduce((s,j)=>s+jobTotals(j).totalPaid, 0);
 
     const outstandingOld = state.customers.reduce((s,c)=>s+Math.max(c.openingDebtRemaining||0,0),0);
@@ -2294,7 +2332,8 @@
             monthExpenseTotal, netCash: paid - monthExpenseTotal - matCost,
             todayBilled: today.billed, todayJobIncome: today.jobIncome, todayPaid: today.paid,
             oldDebtPaidToday: today.oldDebtPaid, oldDebtPaidMonth: oldPaidMonth,
-            outstanding, outstandingOld, byStatus, jobCount: monthJobs.length};
+            outstanding, outstandingOld, byStatus, jobCount: monthJobs.length,
+            periodIndex: pi, periodFrom: bk.from, periodTo: bk.to, periodLabel: periodLabel(pi)};
   }
 
   // ---------- CSV exporters ----------
@@ -2665,10 +2704,8 @@
     const late = overdueJobs();
     const incomeSeries = (()=>{
       // Same buckets as every other figure on the page, so the chart can't disagree with
-      // the cards above it. getFullYear/getMonth are local — a UTC month here read as the
-      // previous one between local midnight and 1am on the 1st.
-      const now = new Date();
-      return monthDailyBuckets(now.getFullYear(), now.getMonth()).list.map(b=>({
+      // the cards above it — which means the same accounting period, not the calendar month.
+      return periodDailyBuckets(currentPeriodIndex()).list.map(b=>({
         label: fmtDate(b.date), value: b.paid, tick: (b.day===1||b.day%5===0)?String(b.day):''
       }));
     })();
@@ -3149,31 +3186,24 @@
   // Which month the Summary is showing. It was hard-wired to the current one, so on the 1st
   // the previous month's day-by-day table became unreachable — the only way to keep it was to
   // remember to export a CSV before midnight.
-  let summaryMonth = todayISO().slice(0,7);
-  // Month arithmetic from local parts. Going through toISOString() here would land on the
-  // previous month for the first hour of every 1st, which is the same trap as the date buttons.
-  function shiftMonth(ym, delta){
-    const bits = String(ym).split('-').map(Number);
-    const d = new Date(bits[0], (bits[1]-1) + delta, 1);
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-  }
+  // Which accounting period the Summary is showing. Left as null it follows today, so the tab
+  // rolls onto the new period by itself; stepping away pins it until "This period" is pressed.
+  let summaryPeriod = null;
   function renderSummary(){
     recomputeAllCustomers();
-    const ymBits = String(summaryMonth).split('-').map(Number);
-    const year = ymBits[0], month = ymBits[1] - 1;
-    const now = new Date(year, month, 1);
-    const isThisMonth = summaryMonth === todayISO().slice(0,7);
-    const nDays = daysInMonth(year, month);
+    const pIndex = (summaryPeriod === null) ? currentPeriodIndex() : summaryPeriod;
+    const isThisMonth = pIndex === currentPeriodIndex();
     const s = state.settings;
     const pad = n=>String(n).padStart(2,'0');
-    const dateFor = d => `${year}-${pad(month+1)}-${pad(d)}`;
 
-    // Every daily figure comes from monthDailyBuckets(), which is also what the Dashboard
-    // and the target cards read. Billed/new-debt/cost/material are keyed to the day the job
-    // was taken in; money paid is keyed to the day it actually came in; stock buys and
-    // expenses to the day the cash left. This used to be four bucket-building loops of its
-    // own, which is how the Dashboard managed to disagree with this table.
-    const bk = monthDailyBuckets(year, month);
+    // Every daily figure comes from the same buckets the Dashboard reads. Billed/new-debt/
+    // cost/material are keyed to the day the job was taken in; money paid to the day it
+    // actually came in; stock buys and expenses to the day the cash left. This used to be
+    // four bucket-building loops of its own, which is how the Dashboard managed to disagree
+    // with this table.
+    const bk = periodDailyBuckets(pIndex);
+    const nDays = bk.nDays;
+    const dateFor = d => bk.order[d-1];
     const expByDay = {};
     bk.list.forEach(b=>{ expByDay[b.date] = b.expenses; });
 
@@ -3202,7 +3232,7 @@
     }
     const collectionRate = mBilled ? mPaid/mBilled : 0;
     const debtPct = mBilled ? mNewDebt/mBilled : 0;
-    const monthLabel = now.toLocaleDateString('en-NG',{month:'long', year:'numeric'});
+    const monthLabel = periodLabel(pIndex);
 
     function buildDailyWeeklyTable(){
       let html=''; let wk=null; let wkHasData=false;
@@ -3274,8 +3304,10 @@
     const ie = buildIncomeExpenseTable();
 
     // Best sellers and top customers, scoped to jobs received this month.
-    const ymNow = `${year}-${pad(month+1)}`;
-    const monthJobsList = state.jobs.filter(j=>(j.dateReceived||'').slice(0,7)===ymNow);
+    // "In this period" is now membership of the bucketed day list, not a month prefix — the
+    // period straddles two calendar months, so a string compare would silently drop half of it.
+    const inMonth = iso => !!bk.days[(iso||'').slice(0,10)];
+    const monthJobsList = state.jobs.filter(j=>inMonth(j.dateReceived));
     const svcMap = new Map();
     monthJobsList.forEach(j=>(j.items||[]).forEach(it=>{
       const key = normName(it.service) || 'ITEM';
@@ -3301,7 +3333,6 @@
     // ---- Cash vs bank transfer for the month ----
     // Money in comes from the cash/bank amounts already recorded on every payment.
     // Money out comes from the method recorded on each CP spend and expense.
-    const inMonth = iso => (iso||'').slice(0,7) === ymNow;
     const monthPayments = [];
     state.jobs.forEach(j=>(j.payments||[]).forEach(p=>{ if(inMonth(p.date)) monthPayments.push(p); }));
     allOldDebtPayments().forEach(p=>{ if(inMonth(p.date)) monthPayments.push(p); });
@@ -3403,15 +3434,23 @@
     content.innerHTML = `
       <div class="lg-card">
         <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
-          <div><label style="margin-top:0">Month</label><input id="sm-month" type="month" value="${summaryMonth}"></div>
-          <button class="lg-btn ghost small" id="sm-prev-month" type="button">◀ Prev month</button>
-          <button class="lg-btn ghost small" id="sm-this-month" type="button" ${isThisMonth?'disabled':''}>This month</button>
-          <button class="lg-btn ghost small" id="sm-next-month" type="button">Next month ▶</button>
+          <button class="lg-btn ghost small" id="sm-prev-month" type="button">◀ Prev period</button>
+          <button class="lg-btn ghost small" id="sm-this-month" type="button" ${isThisMonth?'disabled':''}>This period</button>
+          <button class="lg-btn ghost small" id="sm-next-month" type="button">Next period ▶</button>
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:8px;">
-          Every figure on this tab is for <b>${monthLabel}</b>${isThisMonth?'':' — a month that has already closed'}.
-          The purses on CP Account, Expenses and Inventory are not monthly and are unaffected by this.
+          Every figure on this tab is for <b>${monthLabel}</b> — ${periodLen()} days${isThisMonth?', the period running now':' — a period that has already closed'}.
+          The purses on CP Account, Expenses and Inventory run continuously and are not affected by this.
         </div>
+        <div class="lg-grid cols-2" style="margin-top:10px;">
+          <div><label style="margin-top:0">Cycle starts</label><input id="sm-period-start" type="date" value="${esc(periodAnchor())}"></div>
+          <div><label style="margin-top:0">Days in a cycle</label><input id="sm-period-days" type="number" min="1" max="366" value="${periodLen()}"></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;">
+          Every period is this many days long, counted from the start date and repeating.
+          Changing either reshapes every period; nothing is recorded against a period, so no figure is lost — they are only counted differently.
+        </div>
+        <div style="margin-top:8px;"><button class="lg-btn ghost small" id="sm-save-period" type="button">Save cycle</button></div>
       </div>
       <div class="lg-card">
         <div class="lg-card-title">Cash vs Bank Transfer, day by day — ${monthLabel}</div>
@@ -3662,15 +3701,25 @@
         rows.push([date, plainNum(st.billed), plainNum(st.paid), plainNum(st.newDebt), plainNum(st.matCostUsed), plainNum(st.matWasteCost),
           plainNum(st.netProfit), plainNum(st.pf), plainNum(st.ex), plainNum(st.expenseTotal), plainNum(st.cp)]);
       }
-      downloadCSV(`summary-${year}-${pad(month+1)}.csv`, rows);
+      downloadCSV(`summary-${bk.from}-to-${bk.to}.csv`, rows);
     });
-    document.getElementById('sm-month').addEventListener('change', (e)=>{
-      summaryMonth = e.target.value || todayISO().slice(0,7);
-      renderSummary();
+    document.getElementById('sm-prev-month').addEventListener('click', ()=>{ summaryPeriod = pIndex - 1; renderSummary(); });
+    document.getElementById('sm-next-month').addEventListener('click', ()=>{ summaryPeriod = pIndex + 1; renderSummary(); });
+    // Back to null rather than to today's index, so the tab keeps following the clock and
+    // rolls into the next period on its own instead of pinning to whichever was current now.
+    document.getElementById('sm-this-month').addEventListener('click', ()=>{ summaryPeriod = null; renderSummary(); });
+    document.getElementById('sm-save-period').addEventListener('click', async ()=>{
+      const start = document.getElementById('sm-period-start').value || periodAnchor();
+      const days = Math.max(1, Math.min(366, Math.round(Number(document.getElementById('sm-period-days').value)||30)));
+      state.settings.periodStart = start;
+      state.settings.periodDays = days;
+      await save('settings');
+      // Whatever was being looked at is meaningless once the shape changes, so snap back to
+      // the period today falls in rather than leaving a stale index pointing somewhere odd.
+      summaryPeriod = null;
+      toast(`Cycle saved — ${days} days from ${fmtDate(start)} · now ${periodLabel(currentPeriodIndex())}`);
+      renderAll();
     });
-    document.getElementById('sm-prev-month').addEventListener('click', ()=>{ summaryMonth = shiftMonth(summaryMonth,-1); renderSummary(); });
-    document.getElementById('sm-next-month').addEventListener('click', ()=>{ summaryMonth = shiftMonth(summaryMonth, 1); renderSummary(); });
-    document.getElementById('sm-this-month').addEventListener('click', ()=>{ summaryMonth = todayISO().slice(0,7); renderSummary(); });
     document.getElementById('sm-save-split').addEventListener('click', async ()=>{
       state.settings.pfPct = Number(document.getElementById('sm-pf').value)||0;
       state.settings.exPct = Number(document.getElementById('sm-ex').value)||0;
@@ -6491,10 +6540,13 @@
   function renderStaff(){
     // Local month, not the UTC one — toISOString() here read as last month between local
     // midnight and 1am on the 1st, and the whole tab quietly scoped to the wrong period.
-    const now = new Date(), ym = todayISO().slice(0,7);
-    const monthLabel = now.toLocaleDateString('en-NG',{month:'long',year:'numeric'});
+    // Scoped to the accounting period, like every other "this month" figure in the app. A
+    // month-prefix compare would drop the half of the period that falls in the other month.
+    const pIdx = currentPeriodIndex();
+    const pDays = periodDailyBuckets(pIdx).days;
+    const monthLabel = periodLabel(pIdx);
     const scoped = staffScope==='month'
-      ? state.jobs.filter(j=>(j.dateReceived||'').slice(0,7)===ym)
+      ? state.jobs.filter(j=>!!pDays[j.dateReceived||''])
       : state.jobs.slice();
     const map = new Map();
     scoped.forEach(j=>{
