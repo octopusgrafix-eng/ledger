@@ -684,6 +684,7 @@
     {id:'customers', label:'Customers'},
     {id:'inventory', label:'Inventory'},
     {id:'expenses', label:'Expenses'},
+    {id:'owed', label:'Owed'},
     {id:'cpaccount', label:'CP Account'},
     {id:'dashboard', label:'Dashboard'},
   ];
@@ -722,6 +723,8 @@
     exadjust: [],
     quotes: [],
     recurring: [],
+    // What the shop owes other people: unpaid stock, and money borrowed into the business.
+    payables: [],
     settings: {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
     tab: 'dayview',
     loaded: false,
@@ -1001,7 +1004,7 @@
     updateStorageModeLabel();
   }
 
-  const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['settings','settings-v1']];
+  const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['payables','payables-v1'],['settings','settings-v1']];
   const DEFAULT_SETTINGS = {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
@@ -1336,7 +1339,7 @@
     await seedDefaultsIfEmpty();
   }
 
-  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', settings:'settings-v1'};
+  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', payables:'payables-v1', settings:'settings-v1'};
   async function save(prop){
     try{
       const value = JSON.stringify(state[prop]);
@@ -1445,7 +1448,7 @@
         data: {
           jobs: state.jobs, pricelist: state.pricelist, customers: state.customers,
           materials: state.materials, expenses: state.expenses,
-          cpspend: state.cpspend, cpadjust: state.cpadjust, exadjust: state.exadjust, quotes: state.quotes, recurring: state.recurring, settings: state.settings,
+          cpspend: state.cpspend, cpadjust: state.cpadjust, exadjust: state.exadjust, quotes: state.quotes, recurring: state.recurring, payables: state.payables, settings: state.settings,
         },
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
@@ -1565,10 +1568,11 @@
     state.exadjust = d.exadjust || [];
     state.quotes = d.quotes || [];
     state.recurring = d.recurring || [];
+    state.payables = d.payables || [];
     // Restoring from a backup taken before a setting existed must still land on the
     // current defaults, so this derives from DEFAULT_SETTINGS rather than repeating it.
     state.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
-    await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings'].map(save));
+    await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','payables','settings'].map(save));
     toast('Backup restored');
     renderAll();
   }
@@ -1676,8 +1680,9 @@
     state.exadjust = [];
     state.quotes = [];
     state.recurring = [];
+    state.payables = [];
     state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: '', matOpeningFloat: 0, matStartDate: ''});
-    await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','settings']);
+    await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','payables','settings']);
     toast('All data cleared — starting fresh');
     state.tab = 'dayview';
     renderAll();
@@ -2320,6 +2325,8 @@
     // It is a job-based ratio, not a cash-in-the-month one, and is labelled as such.
     const monthJobs = state.jobs.filter(j => !!bk.days[j.dateReceived||'']);
     const paidOnMonthJobs = monthJobs.reduce((s,j)=>s+jobTotals(j).totalPaid, 0);
+    const periodStockCashOut = stockCashOutInRange(bk.from, bk.to);
+    const periodLoansIn = bk.list.reduce((s,b)=>s+loansInOnDate(b.date), 0);
 
     const outstandingOld = state.customers.reduce((s,c)=>s+Math.max(c.openingDebtRemaining||0,0),0);
     const outstanding = state.jobs.reduce((s,j)=>s+jobTotals(j).debt,0) + outstandingOld;
@@ -2329,7 +2336,11 @@
     return {billed, paid, debt, cp, matCost, matCostUsed, matWasteCost,
             todayMatCost: today.matBought, todayMatCostUsed: today.matUsed, todayMatWasteCost: today.matWaste,
             profit, collectionRate: billed ? paidOnMonthJobs/billed : 0,
-            monthExpenseTotal, netCash: paid - monthExpenseTotal - matCost,
+            monthExpenseTotal,
+            // Same rule as the day sheet: cash in less cash out, where stock bought on credit
+            // costs nothing until it is paid for and borrowed money arriving is cash in.
+            netCash: paid + periodLoansIn - monthExpenseTotal - periodStockCashOut,
+            owedToOthers: payablesOutstanding(),
             todayBilled: today.billed, todayJobIncome: today.jobIncome, todayPaid: today.paid,
             oldDebtPaidToday: today.oldDebtPaid, oldDebtPaidMonth: oldPaidMonth,
             outstanding, outstandingOld, byStatus, jobCount: monthJobs.length,
@@ -2682,6 +2693,7 @@
     else if(state.tab==='customers') renderCustomers();
     else if(state.tab==='inventory') renderInventory();
     else if(state.tab==='expenses') renderExpenses();
+    else if(state.tab==='owed') renderOwed();
     else if(state.tab==='cpaccount') renderCPAccount();
     else if(state.tab==='quotes') renderQuotes();
     else if(state.tab==='staff') renderStaff();
@@ -2823,8 +2835,13 @@
     const netProfit = Math.max(paid-cp-matCostUsed-matWasteCost, 0);
     const s = state.settings;
     const tithe = netProfit*s.tithePct/100, pf = netProfit*s.pfPct/100, ex = netProfit*s.exPct/100;
-    const netCash = paid - expenseTotal - matCost;
-    return {jobsToday, billed, newDebt, cp, matCost, matCostUsed, matWasteCost, paid, jobIncome, oldDebtPaid, paymentsToday, expensesToday, expenseTotal, netProfit, tithe, pf, ex, netCash};
+    // Cash in hand, not earnings. Stock bought on credit takes no cash, so only what was
+    // handed over counts; borrowed money arriving is cash in; and repayments are expenses,
+    // which is why they are not subtracted a second time here.
+    const stockCashOut = stockCashOutOnDate(dateStr);
+    const loansIn = loansInOnDate(dateStr);
+    const netCash = paid + loansIn - expenseTotal - stockCashOut;
+    return {jobsToday, billed, newDebt, cp, matCost, matCostUsed, matWasteCost, paid, jobIncome, oldDebtPaid, paymentsToday, expensesToday, expenseTotal, netProfit, tithe, pf, ex, netCash, stockCashOut, loansIn};
   }
   // Every figure on the day sheet can be opened to show what it's made of. The affordance is
   // the dotted underline already used by `.owed-pay` — a number you can press. `key` names
@@ -5269,10 +5286,27 @@
     const list = [];
     state.materials.forEach(m=>{
       (m.purchases||[]).forEach(p=>{
-        list.push({materialId:m.id, materialName:m.name, unit:m.unit, date:p.date, qty:Number(p.qty)||0, unitCost:Number(p.unitCost)||0, note:p.note||'', purchaseId:p.id});
+        list.push({materialId:m.id, materialName:m.name, unit:m.unit, date:p.date, qty:Number(p.qty)||0,
+                   unitCost:Number(p.unitCost)||0, note:p.note||'', purchaseId:p.id,
+                   paidNow: (p.paidNow===undefined||p.paidNow===null) ? null : (Number(p.paidNow)||0),
+                   supplier: p.supplier||'', payableId: p.payableId||''});
       });
     });
     return list.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  }
+  // What actually left the till for a purchase. A purchase recorded before buying on credit
+  // existed has no paidNow at all, and those were all paid in full — so a missing value means
+  // the whole amount, never zero. Reading it as zero would rewrite history as unpaid debt.
+  function purchaseCashPaid(p){
+    const full = (Number(p.qty)||0) * (Number(p.unitCost)||0);
+    return (p.paidNow === null || p.paidNow === undefined) ? full : (Number(p.paidNow)||0);
+  }
+  function stockCashOutOnDate(dateStr){
+    return allStockPurchases().filter(p=>p.date===dateStr).reduce((s,p)=>s+purchaseCashPaid(p), 0);
+  }
+  function stockCashOutInRange(fromDate, toDate){
+    return allStockPurchases().filter(p=>p.date>=fromDate && p.date<=toDate)
+      .reduce((s,p)=>s+purchaseCashPaid(p), 0);
   }
 
   // ---------- material purse (Inventory tab) ----------
@@ -5495,6 +5529,16 @@
         </div>
         <div class="lg-grid cols-4" style="margin-top:4px;">
           <div><label style="margin-top:0">Amount</label><input id="sp-amount" type="text" value="\u20a60" disabled></div>
+          <div><label style="margin-top:0">Bought from</label><input id="sp-supplier" list="sp-supplier-list" placeholder="supplier \u2014 needed if unpaid">
+            <datalist id="sp-supplier-list">${[...new Set(state.payables.filter(p=>p.kind==='supplier').map(p=>p.who))].map(w=>`<option value="${esc(w)}">`).join('')}</datalist>
+          </div>
+          <div><label style="margin-top:0">Paid now (\u20a6)</label><input id="sp-paid" type="number" min="0" placeholder="blank = paid in full"></div>
+          <div><label style="margin-top:0">Still owing</label><input id="sp-owing" type="text" value="\u20a60" disabled></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;">
+          Leave <b>Paid now</b> blank if you paid in full. Enter less than the amount and the balance
+          becomes a debt on the <b>Owed</b> tab, against the supplier named here. Stock bought on credit
+          still counts as stock the moment it arrives \u2014 but it takes no cash until you actually pay.
         </div>
         <div style="margin-top:10px;"><button class="lg-btn" id="sp-add">Record Purchase</button></div>
       </div>
@@ -5536,10 +5580,18 @@
     function updateStockPurchaseAmount(){
       const qty = Number(document.getElementById('sp-qty').value)||0;
       const cost = Number(document.getElementById('sp-cost').value)||0;
-      document.getElementById('sp-amount').value = naira(qty*cost);
+      const total = qty*cost;
+      const paidRaw = document.getElementById('sp-paid').value;
+      const paid = paidRaw === '' ? total : Math.min(Number(paidRaw)||0, total);
+      document.getElementById('sp-amount').value = naira(total);
+      const owing = Math.max(total - paid, 0);
+      const owingBox = document.getElementById('sp-owing');
+      owingBox.value = naira(owing);
+      owingBox.style.color = owing > 0 ? 'var(--clay)' : '';
+      owingBox.style.fontWeight = owing > 0 ? '700' : '';
     }
-    document.getElementById('sp-qty').addEventListener('input', updateStockPurchaseAmount);
-    document.getElementById('sp-cost').addEventListener('input', updateStockPurchaseAmount);
+    ['sp-qty','sp-cost','sp-paid'].forEach(id=>
+      document.getElementById(id).addEventListener('input', updateStockPurchaseAmount));
     document.getElementById('sp-add').addEventListener('click', async ()=>{
       const name = document.getElementById('sp-material').value.trim();
       const qty = Number(document.getElementById('sp-qty').value)||0;
@@ -5552,11 +5604,34 @@
         m = {id: uid(), name, unit:'pc', unitCost:0, opening:0, restocked:0, purchases:[], reorderLevel:0};
         state.materials.push(m);
       }
+      const total = qty * unitCost;
+      const paidRaw = document.getElementById('sp-paid').value;
+      // Blank means paid in full, which is both the common case and the safe reading — an
+      // unentered field must never quietly become a debt.
+      const paidNow = paidRaw === '' ? total : Math.max(0, Math.min(Number(paidRaw)||0, total));
+      const owing = total - paidNow;
+      const supplier = document.getElementById('sp-supplier').value.trim();
+      if(owing > 0 && !supplier){ toast('Enter who you bought from — a debt needs a name to chase it to'); return; }
+
       m.purchases = m.purchases || [];
-      m.purchases.push({id: uid(), date, qty, unitCost, note:'Stock purchase'});
+      const purchaseId = uid();
+      let payableId = '';
+      if(owing > 0){
+        payableId = uid();
+        state.payables.push({
+          id: payableId, kind:'supplier', who: supplier,
+          what: `${qty} ${m.unit||'unit'} ${m.name}`,
+          date, amount: owing, payments: [],
+          materialId: m.id, purchaseId
+        });
+      }
+      m.purchases.push({id: purchaseId, date, qty, unitCost, note:'Stock purchase',
+                        paidNow, supplier, payableId});
       if(unitCost>0) m.unitCost = unitCost;
-      await save('materials');
-      toast(`Recorded: ${qty} ${m.unit||'unit'} of ${m.name} — ${naira(qty*unitCost)}`);
+      await saveMany(owing > 0 ? ['materials','payables'] : ['materials']);
+      toast(owing > 0
+        ? `Recorded ${qty} ${m.unit||'unit'} of ${m.name} — ${naira(paidNow)} paid, ${naira(owing)} owed to ${supplier}`
+        : `Recorded: ${qty} ${m.unit||'unit'} of ${m.name} — ${naira(total)}`);
       renderInventory();
     });
     attachMatCostAccountHandlers();
@@ -5780,8 +5855,225 @@
     allOldDebtPayments().forEach(p=>{ if(p.date===dateStr) paid += p.cash + p.bank; });
     return Math.max(paid - cp - matUsed - matWaste, 0);
   }
+  // ---------- OWED (what the shop owes other people) ----------
+  let owedOpenId = null;
+  let owedShowSettled = false;
+  function renderOwed(){
+    const all = state.payables.slice().sort((a,b)=>{
+      const A = payableTotals(a), B = payableTotals(b);
+      if((A.balance>0) !== (B.balance>0)) return A.balance>0 ? -1 : 1;   // still owing first
+      return String(b.date||'').localeCompare(String(a.date||''));
+    });
+    const rows = owedShowSettled ? all : all.filter(p=>payableTotals(p).balance > 0);
+    const totalOwed = payablesOutstanding();
+    const totalBorrowed = all.filter(p=>p.kind==='loan').reduce((s,p)=>s+payableTotals(p).balance, 0);
+    const totalSupplier = all.filter(p=>p.kind!=='loan').reduce((s,p)=>s+payableTotals(p).balance, 0);
+    const settledCount = all.length - all.filter(p=>payableTotals(p).balance>0).length;
+
+    content.innerHTML = `
+      <div class="lg-card">
+        <div class="lg-card-title">What the shop owes</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">
+          Stock taken on credit and money borrowed into the business, in one place. Every payment
+          made here is recorded as an <b>expense</b>, so it comes out of the Expenses purse and out
+          of Net Cash — which is what stops the same naira being spent twice.
+          Money borrowed goes <b>into</b> the Expenses purse on the day it arrives, so it can pay for
+          what it was borrowed for. Nothing here touches Net Profit: borrowing is not earning and
+          repaying is not a loss.
+        </div>
+      </div>
+
+      <div class="lg-grid cols-3">
+        <div class="lg-card lg-kpi ${totalOwed>0?'debt':'paid'}"><div class="num">${naira(totalOwed)}</div><div class="lbl">Owed in total</div></div>
+        <div class="lg-card lg-kpi"><div class="num">${naira(totalSupplier)}</div><div class="lbl">To suppliers</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num">${naira(totalBorrowed)}</div><div class="lbl">Borrowed, still to repay</div></div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Record something owed</div>
+        <div class="lg-grid cols-4">
+          <div><label style="margin-top:0">What is it</label>
+            <select id="ow-kind">
+              <option value="supplier">Bought on credit</option>
+              <option value="loan">Money borrowed in</option>
+            </select>
+          </div>
+          <div><label style="margin-top:0">Who</label><input id="ow-who" placeholder="supplier or lender"></div>
+          <div><label style="margin-top:0">Amount (₦)</label><input id="ow-amount" type="number" min="0" value="0"></div>
+          <div><label style="margin-top:0">Date</label><input id="ow-date" type="date" value="${todayISO()}"></div>
+        </div>
+        <div><label>What for</label><input id="ow-what" placeholder="e.g. 3 rolls of SAV, or rent money"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="ow-hint"></div>
+        <div style="margin-top:10px;"><button class="lg-btn" id="ow-add" type="button">Add</button></div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">${owedShowSettled?'Everything':'Still owing'} (${rows.length})</div>
+        <div class="lg-row-actions" style="margin-bottom:8px;">
+          <button class="lg-btn ${owedShowSettled?'ghost':''} small" id="ow-show-open" type="button">Still owing</button>
+          <button class="lg-btn ${owedShowSettled?'':'ghost'} small" id="ow-show-all" type="button">Everything${settledCount?` (${settledCount} settled)`:''}</button>
+        </div>
+        ${!rows.length ? `<div class="lg-empty">${owedShowSettled?'Nothing recorded yet.':'Nothing outstanding — the shop owes nobody.'}</div>` : `
+        <div style="overflow-x:auto;"><table class="cu-table"><thead><tr>
+          <th>Who</th><th>What for</th><th>Date</th><th class="num-col">Amount</th>
+          <th class="num-col">Paid</th><th class="num-col">Balance</th><th></th>
+        </tr></thead><tbody>
+        ${rows.map(p=>{
+          const t = payableTotals(p);
+          return `<tr>
+            <td>${esc(p.who)||'—'}${p.kind==='loan'?' <span class="stamp" style="background:var(--teal);color:#fff;">BORROWED</span>':''}</td>
+            <td data-label="What for" class="muted">${esc(p.what)||'—'}</td>
+            <td data-label="Date">${fmtDate(p.date)}</td>
+            <td class="num-col" data-label="Amount">${naira(t.amount)}</td>
+            <td class="num-col" data-label="Paid">${naira(t.paid)}</td>
+            <td class="num-col" data-label="Balance">${t.balance>0
+              ? `<button class="owed-pay ow-pay-toggle" data-id="${p.id}" title="Record a payment against this">${naira(t.balance)}</button>`
+              : '<span style="color:var(--green);font-weight:600;">settled</span>'}</td>
+            <td class="lg-row-actions"><button class="subtle-link ow-remove" data-id="${p.id}">remove</button></td>
+          </tr>
+          ${owedOpenId===p.id ? `<tr><td colspan="7" style="padding-top:0;">${renderOwedPayForm(p)}</td></tr>` : ''}
+          ${(p.payments||[]).length ? `<tr><td colspan="7" style="padding-top:0;font-size:11px;color:var(--muted);">
+            ${p.payments.map(x=>`${fmtDate(x.date)} — ${naira((Number(x.cash)||0)+(Number(x.bank)||0))}${x.note?' ('+esc(x.note)+')':''}`).join('<br>')}
+          </td></tr>` : ''}`;
+        }).join('')}
+        <tr style="font-weight:700;border-top:2px solid var(--ink);">
+          <td colspan="5">TOTAL STILL OWED</td>
+          <td class="num-col ${totalOwed>0?'flag':''}">${naira(totalOwed)}</td><td></td>
+        </tr>
+        </tbody></table></div>`}
+      </div>
+    `;
+    const hint = document.getElementById('ow-hint');
+    const paintHint = ()=>{
+      hint.innerHTML = document.getElementById('ow-kind').value === 'loan'
+        ? 'Borrowed money is added to the <b>Expenses purse</b> on this date so it can be spent, and shows here until it is repaid. It is not income and never reaches Net Profit.'
+        : 'Records a debt only — use this for credit you took without going through Record Stock Purchase. Buying stock on credit is better entered on the <b>Inventory</b> tab, which links the debt to the stock.';
+    };
+    paintHint();
+    document.getElementById('ow-kind').addEventListener('change', paintHint);
+    document.getElementById('ow-show-open').addEventListener('click', ()=>{ owedShowSettled=false; renderOwed(); });
+    document.getElementById('ow-show-all').addEventListener('click', ()=>{ owedShowSettled=true; renderOwed(); });
+    document.getElementById('ow-add').addEventListener('click', async ()=>{
+      const kind = document.getElementById('ow-kind').value;
+      const who = document.getElementById('ow-who').value.trim();
+      const amount = Number(document.getElementById('ow-amount').value)||0;
+      const date = document.getElementById('ow-date').value || todayISO();
+      const what = document.getElementById('ow-what').value.trim();
+      if(!who){ toast('Enter who it is owed to'); return; }
+      if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+      state.payables.push({id: uid(), kind, who, what, date, amount, payments: [], materialId:'', purchaseId:''});
+      await save('payables');
+      toast(kind==='loan'
+        ? `${naira(amount)} borrowed from ${who} — added to the Expenses purse`
+        : `${naira(amount)} owed to ${who}`);
+      renderOwed();
+    });
+    document.querySelectorAll('.ow-pay-toggle').forEach(b=>{
+      b.addEventListener('click', ()=>{ owedOpenId = (owedOpenId===b.dataset.id)?null:b.dataset.id; renderOwed(); });
+    });
+    document.querySelectorAll('.ow-cancel').forEach(b=>{
+      b.addEventListener('click', ()=>{ owedOpenId = null; renderOwed(); });
+    });
+    document.querySelectorAll('.ow-pay-submit').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const form = btn.closest('.pay-form');
+        const cash = Number(form.querySelector('.ow-cash').value)||0;
+        const bank = Number(form.querySelector('.ow-bank').value)||0;
+        const date = form.querySelector('.ow-date').value || todayISO();
+        if(cash<=0 && bank<=0){ toast('Enter a cash or bank amount'); return; }
+        const p = state.payables.find(x=>x.id===btn.dataset.id);
+        if(!p) return;
+        const t = payableTotals(p);
+        const amt = cash + bank;
+        if(amt > t.balance + 0.0001){ toast(`That is more than the ${naira(t.balance)} still owed`); return; }
+        p.payments = p.payments || [];
+        p.payments.push({id: uid(), date, cash, bank, note:''});
+        // The repayment is an expense. That is what takes it out of the Expenses purse and out
+        // of Net Cash — and it is the only place it is subtracted, so nothing double-counts.
+        state.expenses.push({
+          id: uid(), date,
+          category: p.kind==='loan' ? 'Loan repayment' : 'Supplier payment',
+          note: `${p.who}${p.what?' — '+p.what:''}`,
+          amount: amt,
+          method: cash>0 && bank>0 ? '' : (cash>0 ? 'cash' : 'transfer'),
+          payableId: p.id
+        });
+        await saveMany(['payables','expenses']);
+        const left = payableTotals(p).balance;
+        toast(left>0 ? `${naira(amt)} paid to ${p.who} — ${naira(left)} still owed`
+                     : `${p.who} settled in full`);
+        owedOpenId = null;
+        renderOwed();
+      });
+    });
+    document.querySelectorAll('.ow-remove').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const p = state.payables.find(x=>x.id===btn.dataset.id);
+        if(!p) return;
+        const t = payableTotals(p);
+        const msg = t.paid > 0
+          ? `Remove this record of ${naira(t.amount)} owed to ${p.who}?\n\n${naira(t.paid)} has already been paid against it. The payments stay recorded as expenses — only the debt record goes.\n\nThere is no undo.`
+          : `Remove this record of ${naira(t.amount)} owed to ${p.who}?\n\nThere is no undo.`;
+        if(!confirm(msg)) return;
+        state.payables = state.payables.filter(x=>x.id!==btn.dataset.id);
+        await save('payables');
+        toast('Removed');
+        renderOwed();
+      });
+    });
+  }
+  function renderOwedPayForm(p){
+    const t = payableTotals(p);
+    return `<div class="pay-form" data-id="${p.id}" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--rule);">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+        Paying ${esc(p.who)} — ${naira(t.balance)} still owed. This is recorded as an expense on the
+        date below, so it leaves the Expenses purse and Net Cash.
+      </div>
+      <div class="lg-grid cols-3">
+        <div><label style="margin-top:0">Cash</label><input class="ow-cash" type="number" min="0" value="0"></div>
+        <div><label style="margin-top:0">Transfer</label><input class="ow-bank" type="number" min="0" value="0"></div>
+        <div><label style="margin-top:0">Date</label><input class="ow-date" type="date" value="${todayISO()}"></div>
+      </div>
+      <div class="lg-row-actions" style="margin-top:6px;">
+        <button class="lg-btn small ow-pay-submit" data-id="${p.id}" type="button">Record payment</button>
+        <button class="lg-btn ghost small ow-cancel" type="button">Cancel</button>
+      </div>
+    </div>`;
+  }
+
+  // ---------- what the shop owes other people ----------
+  //
+  // Two things live here because they behave identically once recorded: stock taken on credit
+  // from a supplier, and money borrowed into the business. Both are a sum owed to a named
+  // person, paid down over time, and both need to be visible until they reach zero.
+  //
+  // Where the money moves:
+  //   • A supplier debt moves no cash when it is incurred — the stock arrived, the money did
+  //     not leave. Only what was actually handed over counts as cash out.
+  //   • A loan moves cash IN, and lands in the Expenses purse so it can fund the buying it was
+  //     borrowed for.
+  //   • Every repayment is an expense, which is what draws the purse back down and takes the
+  //     cash out of Net Cash. Repayments are therefore never counted twice.
+  function payableTotals(p){
+    const amount = Number(p && p.amount)||0;
+    const paid = ((p && p.payments)||[]).reduce((s,x)=>s+(Number(x.cash)||0)+(Number(x.bank)||0), 0);
+    return {amount, paid, balance: Math.max(amount - paid, 0), settled: paid >= amount - 0.0001};
+  }
+  function payablesOutstanding(){
+    return state.payables.reduce((s,p)=>s+payableTotals(p).balance, 0);
+  }
+  // Borrowed money arriving on a day. It is an inflow, not earnings — it never touches Net
+  // Profit, only the cash you are holding and the purse you spend from.
+  function loansInOnDate(dateStr){
+    return state.payables
+      .filter(p=>p.kind==='loan' && p.date===dateStr)
+      .reduce((s,p)=>s+(Number(p.amount)||0), 0);
+  }
   function exAutoForDate(dateStr){
-    return exNetProfitForDate(dateStr) * (Number(state.settings.exPct)||0) / 100;
+    // The EX share of the day's profit, plus anything borrowed into the business that day —
+    // borrowed money is spendable, and this is the purse it is spent from.
+    return exNetProfitForDate(dateStr) * (Number(state.settings.exPct)||0) / 100
+         + loansInOnDate(dateStr);
   }
   function exAdjustFor(dateStr){
     const a = state.exadjust.find(x=>x.date===dateStr);
