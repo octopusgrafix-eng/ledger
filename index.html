@@ -2777,18 +2777,18 @@
         <div class="lg-card lg-kpi teal"><div class="num">${naira(m.billed)}</div><div class="lbl">Billed This Month</div></div>
         <div class="lg-card lg-kpi debt"><div class="num">${naira(m.outstanding)}</div><div class="lbl">Debt Outstanding${m.outstandingOld>0?` <span style="font-weight:400;">(${naira(m.outstandingOld)} is old debt)</span>`:''}</div></div>
         <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600">${(m.collectionRate*100).toFixed(1)}%</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">of what you billed this month, paid so far</div></div>
-        <div class="lg-card"><div class="lg-card-title">Net Profit (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.profit)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">same figure as the Summary month total</div></div>
+        <div class="lg-card"><div class="lg-card-title">Net Profit (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('net', m.profit)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">same figure as the Summary month total</div></div>
       </div>
       <div class="lg-grid cols-4">
         <div class="lg-card"><div class="lg-card-title">Jobs This Month</div><div style="font-size:20px;font-weight:600">${m.jobCount}</div></div>
         <div class="lg-card"><div class="lg-card-title">Old Debt Paid This Month</div><div style="font-size:20px;font-weight:600;${m.oldDebtPaidMonth>0?'color:var(--teal);':''}">${naira(m.oldDebtPaidMonth)}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Cost of Production (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.cp)}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Material Cost — Bought (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.matCost)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-purchase-log" style="color:var(--teal);">view Purchase Log \u2192</a></div></div>
+        <div class="lg-card"><div class="lg-card-title">Cost of Production (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('cp', m.cp)}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Material Cost — Bought (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('matBought', m.matCost)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-purchase-log" style="color:var(--teal);">view Purchase Log \u2192</a></div></div>
       </div>
       <div class="lg-grid cols-3">
-        <div class="lg-card"><div class="lg-card-title">Material Cost — Used (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.matCostUsed)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">this is what comes out of Net Profit</div></div>
+        <div class="lg-card"><div class="lg-card-title">Material Cost — Used (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('matUsed', m.matCostUsed)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">this is what comes out of Net Profit</div></div>
         <div class="lg-card"><div class="lg-card-title">Material Cost — Wasted (Month)</div><div style="font-size:20px;font-weight:600;${m.matWasteCost>0?'color:var(--clay);':''}">${naira(m.matWasteCost)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">spoiled/wasted material, also comes out of Net Profit</div></div>
-        <div class="lg-card"><div class="lg-card-title">Expenses (Month)</div><div style="font-size:20px;font-weight:600">${naira(m.monthExpenseTotal)}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Expenses (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('expenses', m.monthExpenseTotal)}</div></div>
         <div class="lg-card"><div class="lg-card-title">Net Cash (Month, after expenses &amp; stock buys)</div><div style="font-size:20px;font-weight:600">${naira(m.netCash)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(m.paid)} in − ${naira(m.monthExpenseTotal)} expenses − ${naira(m.matCost)} stock bought</div></div>
       </div>
       <div class="lg-card">
@@ -3676,12 +3676,14 @@
         ${buildDailyWeeklyTable()}
         <tr style="font-weight:700;border-top:2px solid var(--ink);">
           <td>MONTH TOTAL</td>
-          <td class="num-col">${naira(mBilled)}</td><td class="num-col">${naira(mPaid)}</td>
-          <td class="num-col">${naira(mNewDebt)}</td>
-          <td class="num-col">${naira(mMatCostUsed)}</td>
-          <td class="num-col ${mMatWaste>0?'flag':''}">${naira(mMatWaste)}</td>
-          <td class="num-col">${naira(mGrand)}</td>
-          <td class="num-col">${naira(mPf)}</td><td class="num-col">${naira(mEx)}</td>
+          <td class="num-col">${sumDrill('billed', mBilled)}</td>
+          <td class="num-col">${sumDrill('paid', mPaid)}</td>
+          <td class="num-col">${sumDrill('newDebt', mNewDebt)}</td>
+          <td class="num-col">${sumDrill('matUsed', mMatCostUsed)}</td>
+          <td class="num-col ${mMatWaste>0?'flag':''}">${sumDrill('matWaste', mMatWaste)}</td>
+          <td class="num-col">${sumDrill('net', mGrand)}</td>
+          <td class="num-col">${sumDrill('pf', mPf)}</td>
+          <td class="num-col">${sumDrill('ex', mEx)}</td>
           <td class="num-col">${naira(cumDebt)}</td>
         </tr>
         </tbody></table></div>
@@ -5666,7 +5668,7 @@
       </div>
 
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.opening)}</div><div class="lbl">Carried in from ${fmtDate(shiftDate(matViewDate,-1))}</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num"><button class="kpi-drill sum-drill" data-sum="purse:mat" data-date="${matViewDate}" title="See every day that built this balance">${naira(r.opening)}</button></div><div class="lbl">Carried in from ${fmtDate(shiftDate(matViewDate,-1))}</div></div>
         <div class="lg-card lg-kpi"><div class="num">${naira(r.inflow)}</div><div class="lbl">Material charged out today</div></div>
         <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(r.available)}</div><div class="lbl">Available to restock with</div></div>
         <div class="lg-card lg-kpi ${r.closing<0?'debt':'paid'}"><div class="num">${naira(r.closing)}</div><div class="lbl">Carries to ${fmtDate(shiftDate(matViewDate,1))}</div></div>
@@ -6132,6 +6134,145 @@
     allOldDebtPayments().forEach(p=>{ if(p.date===dateStr) paid += p.cash + p.bank; });
     return Math.max(paid - cp - matUsed - matWaste, 0);
   }
+  // ---------- "where did this number come from" ----------
+  //
+  // Nearly every total in this app is one of two shapes: a sum across a run of days, or a purse
+  // balance carried from its history. So rather than hand-writing an explanation per figure,
+  // there are two explainers and each total says which one it is and what to feed it.
+  //
+  // A modal rather than an inline panel: these totals sit inside tables and KPI rows where
+  // there is nowhere to expand into without shifting the figures being compared.
+  function openExplain(title, subtitle, columns, rows, totalLabel, totalValue, footer){
+    const root = document.getElementById('lg-modal-root');
+    root.innerHTML = `
+      <div class="lg-overlay" id="explain-overlay">
+        <div class="lg-receipt" style="max-width:560px;">
+          <h2 style="text-align:left;">${esc(title)}</h2>
+          ${subtitle ? `<div class="r-sub" style="text-align:left;">${subtitle}</div>` : ''}
+          <div class="r-dashed"></div>
+          ${!rows.length ? '<div class="lg-empty">Nothing contributed to this.</div>' : `
+          <div style="max-height:52vh;overflow-y:auto;">
+            <table><thead><tr>${columns.map(c=>`<th${c.num?' class="num-col"':''}>${esc(c.label)}</th>`).join('')}</tr></thead>
+            <tbody>${rows.map(r=>`<tr>${r.map((cell,i)=>
+              `<td${columns[i]&&columns[i].num?' class="num-col"':''}>${cell}</td>`).join('')}</tr>`).join('')}
+            </tbody></table>
+          </div>`}
+          <div class="r-dashed"></div>
+          <div class="r-row total"><span>${esc(totalLabel)}</span><span>${totalValue}</span></div>
+          ${footer ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;">${footer}</div>` : ''}
+          <div class="lg-receipt-actions">
+            <button class="lg-btn ghost small" id="explain-close" type="button">Close</button>
+          </div>
+        </div>
+      </div>`;
+    const close = ()=>{ root.innerHTML=''; };
+    document.getElementById('explain-close').addEventListener('click', close);
+    document.getElementById('explain-overlay').addEventListener('click', (e)=>{
+      if(e.target.id==='explain-overlay') close();
+    });
+  }
+
+  // Shape one: a total summed across days. Every period and month figure on the Summary and the
+  // Dashboard is this — the only thing that changes is which field of the day bucket is read.
+  const DAY_SUM_FIELDS = {
+    billed:   {label:'Billed',              note:'keyed to the day each job was taken in'},
+    paid:     {label:'Collected',           note:'keyed to the day the money actually arrived, including payments against older jobs'},
+    newDebt:  {label:'New debt',            note:'what was billed on that day and not paid'},
+    cp:       {label:'Cost of production',  note:'keyed to the day each job was taken in'},
+    matUsed:  {label:'Material used',       note:'valued at the material price when it was charged'},
+    matWaste: {label:'Material wasted',     note:'spoiled stock, which comes out of profit exactly like material used'},
+    matBought:{label:'Stock bought',        note:'keyed to the day of purchase — it does not reduce Net Profit'},
+    expenses: {label:'Expenses',            note:'keyed to the day the cash left'},
+    net:      {label:'Net Profit',          note:'collected less cost of production, material used and material wasted, floored at zero each day'},
+  };
+  // Marks a total as openable. The key says which explanation to run; the click is picked up
+  // by one delegated listener on the app root rather than per-render bindings, so a total can
+  // be dropped into any tab without wiring anything up.
+  function sumDrill(key, amount){
+    return `<button class="kpi-drill sum-drill" data-sum="${key}" title="See how this total was arrived at">${naira(amount)}</button>`;
+  }
+  // PF and EX are shares of Net Profit rather than day fields, so they get their own working.
+  function explainShare(which, bk, titlePrefix){
+    const pct = Number(which==='pf' ? state.settings.pfPct : state.settings.exPct)||0;
+    const net = bk.list.reduce((s,b)=>s+(b.net||0), 0);
+    const days = bk.list.filter(b=>(b.net||0) > 0.0001);
+    openExplain(`${titlePrefix} — ${which.toUpperCase()} share (${pct}%)`,
+      `${pct}% of each day's Net Profit, across ${fmtDate(bk.from)} to ${fmtDate(bk.to)}`,
+      [{label:'Day'},{label:'Net Profit',num:true},{label:`${which.toUpperCase()} ${pct}%`,num:true}],
+      days.map(b=>[fmtDate(b.date), naira(b.net), naira(b.net*pct/100)]),
+      'TOTAL', naira(net*pct/100),
+      `Taken day by day rather than off the period total, which comes to the same thing here but keeps every day's split independent.`
+    );
+  }
+  function explainDaySum(field, bk, titlePrefix){
+    const meta = DAY_SUM_FIELDS[field] || {label:field, note:''};
+    const days = bk.list.filter(b=>Math.abs(b[field]||0) > 0.0001);
+    const total = bk.list.reduce((s,b)=>s+(b[field]||0), 0);
+    const rows = days.map(b=>[fmtDate(b.date), naira(b[field])]);
+    openExplain(
+      `${titlePrefix} — ${meta.label}`,
+      `${fmtDate(bk.from)} to ${fmtDate(bk.to)} · ${days.length} day${days.length===1?'':'s'} contributed`,
+      [{label:'Day'},{label:meta.label,num:true}],
+      rows,
+      'TOTAL', naira(total),
+      meta.note ? `This figure is ${meta.note}.` : ''
+    );
+  }
+  // Net Profit is the one day-sum worth breaking into its parts rather than just listing days,
+  // because the question behind it is almost always "why is it lower than what I collected".
+  function explainNetProfit(bk, titlePrefix){
+    const t = f => bk.list.reduce((s,b)=>s+(b[f]||0), 0);
+    const paid=t('paid'), cp=t('cp'), mu=t('matUsed'), mw=t('matWaste'), net=t('net');
+    const raw = paid - cp - mu - mw;
+    const rows = [
+      ['Collected', naira(paid)],
+      ['− Cost of production', naira(cp)],
+      ['− Material used', naira(mu)],
+      ['− Material wasted', naira(mw)],
+    ];
+    openExplain(`${titlePrefix} — Net Profit`,
+      `${fmtDate(bk.from)} to ${fmtDate(bk.to)}`,
+      [{label:'Part'},{label:'Amount',num:true}],
+      rows, 'NET PROFIT', naira(net),
+      (Math.abs(raw-net) > 0.5)
+        ? `The parts come to ${naira(raw)}. Each day is floored at zero before being added, so a loss-making day does not eat into a good one — which is why the total is ${naira(net)}.`
+        : 'Buying stock is not in this. Restocking is paid from the material purse, not out of profit.'
+    );
+  }
+  // Shape two: a purse balance. Carried-in is the sum of every earlier day's in and out, which
+  // is exactly the thing nobody can reconstruct by eye.
+  function explainPurse(purse, dateStr){
+    const P = {
+      cp:  {label:'CP Account',     dates:cpActiveDates,  inflow:cpInflowFor,  spent:cpSpentFor,
+            float:()=>Number(state.settings.cpOpeningFloat)||0, start:()=>state.settings.cpStartDate||''},
+      ex:  {label:'Expenses',       dates:exActiveDates,  inflow:exInflowFor,  spent:exSpentFor,
+            float:()=>Number(state.settings.exOpeningFloat)||0, start:()=>state.settings.exStartDate||''},
+      pf:  {label:'Profit',         dates:pfActiveDates,  inflow:pfInflowFor,  spent:pfSpentFor,
+            float:()=>Number(state.settings.pfOpeningFloat)||0, start:()=>state.settings.pfStartDate||''},
+      mat: {label:'Material',       dates:matActiveDates, inflow:matInflowFor, spent:matSpentFor,
+            float:()=>Number(state.settings.matOpeningFloat)||0, start:()=>state.settings.matStartDate||''},
+    }[purse];
+    if(!P) return;
+    const start = P.start();
+    let bal = P.float();
+    const rows = [];
+    if(bal) rows.push(['Opening float', naira(bal), '', naira(bal)]);
+    P.dates().forEach(d=>{
+      if(d >= dateStr) return;
+      if(start && d < start) return;
+      const i = P.inflow(d), s = P.spent(d);
+      if(!i && !s) return;
+      bal += i - s;
+      rows.push([fmtDate(d), i?naira(i):'—', s?naira(s):'—', naira(bal)]);
+    });
+    openExplain(`${P.label} purse — carried into ${fmtDate(dateStr)}`,
+      start ? `Counting from ${fmtDate(start)}` : 'Counting all history',
+      [{label:'Day'},{label:'In',num:true},{label:'Out',num:true},{label:'Balance',num:true}],
+      rows, 'CARRIED IN', naira(bal),
+      'Each day\'s closing balance becomes the next day\'s opening. Days where nothing moved are skipped.'
+    );
+  }
+
   // ---------- PROFIT (the owner's share: what came in, what was taken, what is left) ----------
   let pfViewDate = todayISO();
   const PF_DRAW_REASONS = ['Drawings','Savings','Reinvestment','Family','Rent','School fees','Other'];
@@ -6170,7 +6311,7 @@
       </div>
 
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.opening)}</div><div class="lbl">Carried in from ${fmtDate(shiftDate(pfViewDate,-1))}</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num"><button class="kpi-drill sum-drill" data-sum="purse:pf" data-date="${pfViewDate}" title="See every day that built this balance">${naira(r.opening)}</button></div><div class="lbl">Carried in from ${fmtDate(shiftDate(pfViewDate,-1))}</div></div>
         <div class="lg-card lg-kpi paid"><div class="num">${naira(r.inflow)}</div><div class="lbl">Profit share earned today</div></div>
         <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(r.available)}</div><div class="lbl">Available to take</div></div>
         <div class="lg-card lg-kpi ${r.closing<0?'debt':'paid'}"><div class="num">${naira(r.closing)}</div><div class="lbl">Carries to ${fmtDate(shiftDate(pfViewDate,1))}</div></div>
@@ -6719,7 +6860,7 @@
       </div>
 
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.opening)}</div><div class="lbl">Carried in from ${fmtDate(shiftDate(expensesViewDate,-1))}</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num"><button class="kpi-drill sum-drill" data-sum="purse:ex" data-date="${expensesViewDate}" title="See every day that built this balance">${naira(r.opening)}</button></div><div class="lbl">Carried in from ${fmtDate(shiftDate(expensesViewDate,-1))}</div></div>
         <div class="lg-card lg-kpi"><div class="num">${naira(r.inflow)}</div><div class="lbl">EX in today${r.adjusted?' (adjusted)':''}</div></div>
         <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(r.available)}</div><div class="lbl">Available to spend</div></div>
         <div class="lg-card lg-kpi ${r.closing<0?'debt':'paid'}"><div class="num">${naira(r.closing)}</div><div class="lbl">Carries to ${fmtDate(shiftDate(expensesViewDate,1))}</div></div>
@@ -7094,7 +7235,7 @@
       </div>
 
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.opening)}</div><div class="lbl">Carried in from ${fmtDate(shiftDate(cpViewDate,-1))}</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num"><button class="kpi-drill sum-drill" data-sum="purse:cp" data-date="${cpViewDate}" title="See every day that built this balance">${naira(r.opening)}</button></div><div class="lbl">Carried in from ${fmtDate(shiftDate(cpViewDate,-1))}</div></div>
         <div class="lg-card lg-kpi"><div class="num">${naira(r.inflow)}</div><div class="lbl">CP in today${r.adjusted?' (adjusted)':''}</div></div>
         <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(r.available)}</div><div class="lbl">Available to spend</div></div>
         <div class="lg-card lg-kpi ${r.closing<0?'debt':'paid'}"><div class="num">${naira(r.closing)}</div><div class="lbl">Carries to ${fmtDate(shiftDate(cpViewDate,1))}</div></div>
@@ -8386,6 +8527,23 @@
         dayOpenCard = e.target.dataset.key;
         state.tab = 'dayview';
         renderAll();
+      }
+      // One listener for every "how was this total arrived at" control in the app. Delegated so
+      // a total can be added to any tab by emitting the button alone, with nothing to re-bind
+      // on the dozens of re-renders these tables go through.
+      if(e.target.classList && e.target.classList.contains('sum-drill')){
+        e.preventDefault();
+        const key = e.target.dataset.sum || '';
+        const [kind, arg] = key.split(':');
+        if(kind === 'purse'){ explainPurse(arg, e.target.dataset.date || todayISO()); return; }
+        // Everything else is a sum over the period the tab is showing.
+        const pi = (state.tab === 'summary' && typeof summaryPeriod !== 'undefined' && summaryPeriod !== null)
+          ? summaryPeriod : currentPeriodIndex();
+        const bk = periodDailyBuckets(pi);
+        const label = periodLabel(pi);
+        if(key === 'net') return explainNetProfit(bk, label);
+        if(key === 'pf' || key === 'ex') return explainShare(key, bk, label);
+        if(DAY_SUM_FIELDS[key]) return explainDaySum(key, bk, label);
       }
       // Delegated, because "send to staff" appears on job cards that a dozen
       // unrelated handlers re-render — binding it per render would mean adding a
