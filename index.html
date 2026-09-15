@@ -366,6 +366,9 @@
   /* When the customer took it away. Green because a collected job is a finished one, and that
      is what green means everywhere else here. */
   .collected-at{font-size:10px;color:var(--green);margin-top:3px;line-height:1.4;}
+  /* Amber, not clay: this is a warning that something still has to be done, not a debt. */
+  .no-mat-yet{font-size:10px;color:var(--amber);margin-top:3px;font-weight:600;}
+  .no-mat-set{font-size:10px;color:var(--muted);margin-top:3px;}
   .wl-by{font-size:10px;color:var(--teal);text-decoration:none;white-space:nowrap;}
   .wl-item.is-done .wl-by{color:var(--muted);}
   /* The clock the floor put on this line, read back here. Clay once it's over the time they
@@ -4384,7 +4387,12 @@
       <div class="lg-row-actions" style="margin-top:6px;">
         <button class="lg-btn small waste-submit" data-id="${j.id}" type="button">Add to this job</button>
         <button class="lg-btn ghost small waste-cancel" type="button">Cancel</button>
+        ${!jobHasMaterial(j) ? `<button class="lg-btn ghost small mat-none" data-id="${j.id}" type="button"
+            title="Only for a job that genuinely consumed nothing">${j.noMaterial?'✓ Marked as using no material':'This job used no material'}</button>` : ''}
       </div>
+      ${j.noMaterial && !jobHasMaterial(j) ? `<div style="font-size:11px;color:var(--amber);margin-top:6px;">
+        Recorded as using no material. Adding any material below clears that.
+      </div>` : ''}
       ${materials.length ? `<div style="margin-top:10px;">
         <table><thead><tr>
           <th>Material</th><th class="num-col">Used</th><th class="num-col">Wasted</th>
@@ -4433,7 +4441,13 @@
       return `<tr>
         <td>${fmtDate(j.dateReceived)}</td>
         <td>${esc(j.customerName)}</td>
-        <td>${jobChecklistHTML(j, !!withActions)}</td>
+        <td>${jobChecklistHTML(j, !!withActions)}${
+          // Flagged before it blocks, so a job that will refuse to be delivered says so while
+          // there is still time to enter it, rather than only at the counter with the customer
+          // waiting. Delivered jobs are past it; no-material jobs have answered it.
+          (!jobMaterialSettled(j) && j.status !== 'DELIVERED')
+            ? '<div class="no-mat-yet">No material recorded yet</div>' : ''
+        }${ j.noMaterial ? '<div class="no-mat-set">Uses no material</div>' : '' }</td>
         <td style="font-size:11.5px;">${dueCell(j)}</td>
         <td>${withActions ? `<select class="job-status-select" data-id="${j.id}">${STATUSES.map(s=>`<option value="${s}" ${s===j.status?'selected':''}>${s}</option>`).join('')}</select>` : `<span class="stamp ${STATUS_CLASS[j.status]}">${j.status}</span>`}${
           collectedText(j) ? `<div class="collected-at">Collected ${esc(collectedText(j))}</div>` : ''
@@ -4551,12 +4565,33 @@
       });
     });
   }
+  // Has anything actually been charged to this job?
+  function jobHasMaterial(j){
+    return jobMaterialsList(j).some(m=>(Number(m.qty)||0) > 0 || (Number(m.waste)||0) > 0);
+  }
+  // A job may legitimately consume nothing — a design-only job, a reprint off someone else's
+  // stock. That has to be sayable, or the block just gets worked around by inventing a figure.
+  // Saying it is a deliberate act that gets recorded, so "no material" is a statement rather
+  // than an omission, and the two are told apart afterwards.
+  function jobMaterialSettled(j){ return jobHasMaterial(j) || !!j.noMaterial; }
+
   function attachStatusHandlers(reRender){
     reRender = reRender || defaultJobsReRender;
     document.querySelectorAll('.job-status-select').forEach(sel=>{
       sel.addEventListener('change', async ()=>{
         const j = state.jobs.find(j=>j.id===sel.dataset.id);
         if(!j) return;
+        // Material is known at the bench and forgotten by the time the money is counted, which
+        // is how a month of jobs ended up charging 2.8% of what they billed. DELIVERED is the
+        // gate because it is the owner's own action — staff can reach READY but cannot enter
+        // material, so gating them there would strand the shop floor.
+        if(sel.value === 'DELIVERED' && !jobMaterialSettled(j)){
+          sel.value = j.status;                       // put the dropdown back; nothing is saved
+          openWasteId = j.id;                         // open the material form on this job
+          toast('Record what material this job used before marking it delivered');
+          reRender();
+          return;
+        }
         j.status = sel.value;
         j.history = j.history||[];
         j.history.push({status:sel.value, date: todayISO(), at: nowISO()});
@@ -4742,12 +4777,27 @@
           known.unitCost = unitCostGiven;
           materialsChanged = true;
         }
+        // Adding material contradicts "this job used nothing", so the flag goes. Leaving it set
+        // would let a job claim both at once, and the flag is what the DELIVERED gate reads.
+        if(j.noMaterial) delete j.noMaterial;
         await saveMany(materialsChanged ? ['jobs','materials'] : ['jobs']);
         const bits = [];
         if(used>0)  bits.push(used + ' used');
         if(waste>0) bits.push(waste + ' wasted');
         toast(materialName + ' - ' + bits.join(', '));
         reRender();   // stays open, so several materials can be entered in one go
+      });
+    });
+    document.querySelectorAll('.mat-none').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const j = state.jobs.find(x=>x.id===btn.dataset.id);
+        if(!j) return;
+        j.noMaterial = !j.noMaterial;
+        await save('jobs');
+        toast(j.noMaterial
+          ? `${j.customerName} — recorded as using no material`
+          : `${j.customerName} — no longer marked as using no material`);
+        reRender();
       });
     });
     document.querySelectorAll('.mat-remove').forEach(btn=>{
