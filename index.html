@@ -363,6 +363,9 @@
   /* The one-line summary exists only for narrow screens; on a desktop the real columns say it
      better, so it is not a column there at all. */
   .cu-table .cu-sum{display:none;}
+  /* When the customer took it away. Green because a collected job is a finished one, and that
+     is what green means everywhere else here. */
+  .collected-at{font-size:10px;color:var(--green);margin-top:3px;line-height:1.4;}
   .wl-by{font-size:10px;color:var(--teal);text-decoration:none;white-space:nowrap;}
   .wl-item.is-done .wl-by{color:var(--muted);}
   /* The clock the floor put on this line, read back here. Clay once it's over the time they
@@ -1869,6 +1872,28 @@
     if(d.overdue) return `<span class="flag">${d.label}<br><span style="font-size:10px;">${d.note}</span></span>`;
     if(d.soon) return `<span style="color:var(--amber-deep);font-weight:600;">${d.label}<br><span style="font-size:10px;">${d.note}</span></span>`;
     return `${d.label}${d.note?`<br><span style="font-size:10px;" class="muted">${d.note}</span>`:''}`;
+  }
+  // When the customer actually took the job away. Every status change already stamps a full
+  // instant into `history`, so nothing new is recorded — this only reads what was written.
+  //
+  // The LAST move to DELIVERED is the one that counts: a job marked delivered, put back to
+  // READY because something was wrong, then delivered again, left the shop on the second date.
+  // Reading the first would report a handover that got reversed.
+  function collectedStamp(j){
+    if(!j || j.status !== 'DELIVERED') return null;
+    const hits = (j.history||[]).filter(h=>h && h.status==='DELIVERED');
+    if(!hits.length) return null;
+    const last = hits[hits.length-1];
+    // Jobs delivered before stage timestamps existed carry a date and no instant. Showing the
+    // date alone is honest; inventing midnight would not be.
+    if(last.at) return {iso:last.at, hasTime:true};
+    if(last.date) return {iso:last.date, hasTime:false};
+    return null;
+  }
+  function collectedText(j){
+    const c = collectedStamp(j);
+    if(!c) return '';
+    return c.hasTime ? fmtDateTime(c.iso) : fmtDate(c.iso) + ' (time not recorded)';
   }
   function overdueJobs(){
     return state.jobs.filter(j=>dueInfo(j).overdue).sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''));
@@ -4254,6 +4279,7 @@
       <div class="jc-top"><span>${esc(j.customerName)}</span><span class="jc-amt">${naira(t.totalBilled)}</span></div>
       <div class="jc-desc">${fmtDate(j.dateReceived)}</div>
       ${jobChecklistHTML(j, true)}
+      ${collectedText(j) ? `<div class="collected-at">Collected ${esc(collectedText(j))}</div>` : ''}
       ${t.debt>0 ? `<div class="flag">Owes ${naira(t.debt)}</div>`:''}
       ${t.credit>0 ? `<div style="color:var(--teal);font-weight:600;">Credit ${naira(t.credit)}</div>`:''}
       ${jobMaterialsList(j).length ? `<div style="font-size:11px;color:var(--muted);">Materials used: ${jobMaterialsList(j).map(m=>`${esc(m.name)} \u00d7${m.qty}${Number(m.waste)>0?` <span style="color:var(--clay);">(+${m.waste} wasted)</span>`:''}`).join(', ')} (${naira(t.materialUsedCost)} used${t.materialWasteCost>0?` + ${naira(t.materialWasteCost)} wasted`:''} — counted in today's material cost; see <a href="#" class="goto-purchase-log" style="color:var(--teal);">Purchase Log</a> for what was spent buying stock)</div>` : ''}
@@ -4409,7 +4435,9 @@
         <td>${esc(j.customerName)}</td>
         <td>${jobChecklistHTML(j, !!withActions)}</td>
         <td style="font-size:11.5px;">${dueCell(j)}</td>
-        <td>${withActions ? `<select class="job-status-select" data-id="${j.id}">${STATUSES.map(s=>`<option value="${s}" ${s===j.status?'selected':''}>${s}</option>`).join('')}</select>` : `<span class="stamp ${STATUS_CLASS[j.status]}">${j.status}</span>`}</td>
+        <td>${withActions ? `<select class="job-status-select" data-id="${j.id}">${STATUSES.map(s=>`<option value="${s}" ${s===j.status?'selected':''}>${s}</option>`).join('')}</select>` : `<span class="stamp ${STATUS_CLASS[j.status]}">${j.status}</span>`}${
+          collectedText(j) ? `<div class="collected-at">Collected ${esc(collectedText(j))}</div>` : ''
+        }</td>
         <td class="num-col">${naira(t.totalBilled)}</td>
         <td class="num-col">${naira(t.totalPaid)}</td>
         <td class="num-col ${t.debt>0?'flag':''}">${
