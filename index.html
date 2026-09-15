@@ -694,6 +694,7 @@
     {id:'inventory', label:'Inventory'},
     {id:'expenses', label:'Expenses'},
     {id:'owed', label:'Owed'},
+    {id:'profit', label:'Profit'},
     {id:'cpaccount', label:'CP Account'},
     {id:'dashboard', label:'Dashboard'},
   ];
@@ -734,7 +735,9 @@
     recurring: [],
     // What the shop owes other people: unpaid stock, and money borrowed into the business.
     payables: [],
-    settings: {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''},
+    // Money taken out of the owner's profit share — drawings, savings, reinvestment.
+    pfdraw: [],
+    settings: {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', pfOpeningFloat:0, pfStartDate:'', matOpeningFloat:0, matStartDate:''},
     tab: 'dayview',
     loaded: false,
   };
@@ -1013,8 +1016,8 @@
     updateStorageModeLabel();
   }
 
-  const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['payables','payables-v1'],['settings','settings-v1']];
-  const DEFAULT_SETTINGS = {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', matOpeningFloat:0, matStartDate:''};
+  const STORAGE_KEYS =[['jobs','jobs-v1'],['pricelist','pricelist-v1'],['customers','customers-v1'],['materials','materials-v1'],['expenses','expenses-v1'],['cpspend','cpspend-v1'],['cpadjust','cpadjust-v1'],['exadjust','exadjust-v1'],['quotes','quotes-v1'],['recurring','recurring-v1'],['payables','payables-v1'],['pfdraw','pfdraw-v1'],['settings','settings-v1']];
+  const DEFAULT_SETTINGS = {tithePct:0, pfPct:70, exPct:30, periodStart:'2026-08-31', periodDays:30, monthlyTarget:0, targetBasis:'pf', targetWorksSundays:false, shopName:'YOUR BUSINESS NAME', shopPhone:'', shopAddress:'', receiptCounter:0, cpOpeningFloat:0, cpStartDate:'', exOpeningFloat:0, exStartDate:'', pfOpeningFloat:0, pfStartDate:'', matOpeningFloat:0, matStartDate:''};
   function fsAllDoc(){
     // Everything lives as fields on ONE document, so a fresh load costs one round trip
     // instead of eleven. The document is the signed-in user's uid, which is what the
@@ -1348,7 +1351,7 @@
     await seedDefaultsIfEmpty();
   }
 
-  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', payables:'payables-v1', settings:'settings-v1'};
+  const SAVE_KEY_MAP = {jobs:'jobs-v1', pricelist:'pricelist-v1', customers:'customers-v1', materials:'materials-v1', expenses:'expenses-v1', cpspend:'cpspend-v1', cpadjust:'cpadjust-v1', exadjust:'exadjust-v1', quotes:'quotes-v1', recurring:'recurring-v1', payables:'payables-v1', pfdraw:'pfdraw-v1', settings:'settings-v1'};
   async function save(prop){
     try{
       const value = JSON.stringify(state[prop]);
@@ -1457,7 +1460,7 @@
         data: {
           jobs: state.jobs, pricelist: state.pricelist, customers: state.customers,
           materials: state.materials, expenses: state.expenses,
-          cpspend: state.cpspend, cpadjust: state.cpadjust, exadjust: state.exadjust, quotes: state.quotes, recurring: state.recurring, payables: state.payables, settings: state.settings,
+          cpspend: state.cpspend, cpadjust: state.cpadjust, exadjust: state.exadjust, quotes: state.quotes, recurring: state.recurring, payables: state.payables, pfdraw: state.pfdraw, settings: state.settings,
         },
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
@@ -1578,10 +1581,11 @@
     state.quotes = d.quotes || [];
     state.recurring = d.recurring || [];
     state.payables = d.payables || [];
+    state.pfdraw = d.pfdraw || [];
     // Restoring from a backup taken before a setting existed must still land on the
     // current defaults, so this derives from DEFAULT_SETTINGS rather than repeating it.
     state.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
-    await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','payables','settings'].map(save));
+    await Promise.all(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','payables','pfdraw','settings'].map(save));
     toast('Backup restored');
     renderAll();
   }
@@ -1690,8 +1694,9 @@
     state.quotes = [];
     state.recurring = [];
     state.payables = [];
-    state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: '', matOpeningFloat: 0, matStartDate: ''});
-    await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','payables','settings']);
+    state.pfdraw = [];
+    state.settings = Object.assign({}, state.settings, {receiptCounter: 0, cpOpeningFloat: 0, cpStartDate: '', exOpeningFloat: 0, exStartDate: '', pfOpeningFloat: 0, pfStartDate: '', matOpeningFloat: 0, matStartDate: ''});
+    await saveMany(['jobs','pricelist','customers','materials','expenses','cpspend','cpadjust','exadjust','quotes','recurring','payables','pfdraw','settings']);
     toast('All data cleared — starting fresh');
     state.tab = 'dayview';
     renderAll();
@@ -2725,6 +2730,7 @@
     else if(state.tab==='inventory') renderInventory();
     else if(state.tab==='expenses') renderExpenses();
     else if(state.tab==='owed') renderOwed();
+    else if(state.tab==='profit') renderProfit();
     else if(state.tab==='cpaccount') renderCPAccount();
     else if(state.tab==='quotes') renderQuotes();
     else if(state.tab==='staff') renderStaff();
@@ -6068,6 +6074,50 @@
 
   // Net Profit for one day, mirroring dayStats() — money collected that day, less the cost
   // of production and material used/wasted on jobs received that day.
+  // ---------- the profit purse ----------
+  //
+  // CP and EX each had a purse; PF — the owner's own share, the largest of the three — had
+  // none. The daily figure was computed and shown and then tracked nowhere, so "how much
+  // profit is actually still there" had no answer: it was the split minus whatever had been
+  // taken, and nothing recorded the taking.
+  //
+  // Same shape as the other two on purpose (opening float, optional start date, inflow, spend,
+  // carried balance) so there is one pattern in this file rather than three.
+  function pfAutoForDate(dateStr){
+    return exNetProfitForDate(dateStr) * (Number(state.settings.pfPct)||0) / 100;
+  }
+  function pfInflowFor(dateStr){ return pfAutoForDate(dateStr); }
+  function pfSpentFor(dateStr){
+    return state.pfdraw.filter(d=>d.date===dateStr).reduce((s,d)=>s+(Number(d.amount)||0), 0);
+  }
+  // Every date that moves the purse: a day that earned profit, or a day money was taken out.
+  function pfActiveDates(){
+    const set = new Set();
+    state.jobs.forEach(j=>{
+      if(j.dateReceived) set.add(j.dateReceived);
+      (j.payments||[]).forEach(p=>{ if(p.date) set.add(p.date); });
+    });
+    allOldDebtPayments().forEach(p=>{ if(p.date) set.add(p.date); });
+    state.pfdraw.forEach(d=>{ if(d.date) set.add(d.date); });
+    return Array.from(set).sort();
+  }
+  function pfOpeningFor(dateStr){
+    const start = state.settings.pfStartDate || '';
+    let bal = Number(state.settings.pfOpeningFloat)||0;
+    pfActiveDates().forEach(d=>{
+      if(d >= dateStr) return;
+      if(start && d < start) return;
+      bal += pfInflowFor(d) - pfSpentFor(d);
+    });
+    return bal;
+  }
+  function pfDayRow(dateStr){
+    const opening = pfOpeningFor(dateStr);
+    const inflow = pfInflowFor(dateStr);
+    const spent = pfSpentFor(dateStr);
+    return {opening, inflow, spent, available: opening + inflow, closing: opening + inflow - spent};
+  }
+
   function exNetProfitForDate(dateStr){
     let cp=0, matUsed=0, matWaste=0;
     state.jobs.forEach(j=>{
@@ -6082,6 +6132,249 @@
     allOldDebtPayments().forEach(p=>{ if(p.date===dateStr) paid += p.cash + p.bank; });
     return Math.max(paid - cp - matUsed - matWaste, 0);
   }
+  // ---------- PROFIT (the owner's share: what came in, what was taken, what is left) ----------
+  let pfViewDate = todayISO();
+  const PF_DRAW_REASONS = ['Drawings','Savings','Reinvestment','Family','Rent','School fees','Other'];
+  function renderProfit(){
+    const r = pfDayRow(pfViewDate);
+    const s = state.settings;
+    const dayRows = state.pfdraw.filter(d=>d.date===pfViewDate).sort((a,b)=>String(b.id).localeCompare(String(a.id)));
+    const ym = pfViewDate.slice(0,7);
+    const monthLabel = new Date(pfViewDate+'T00:00:00').toLocaleDateString('en-NG',{month:'long',year:'numeric'});
+
+    // The history below is the accounting period, matching Summary and the Dashboard, so the
+    // two never tell different stories about the same run of days.
+    const pi = currentPeriodIndex();
+    const bk = periodDailyBuckets(pi);
+    const traded = bk.list.filter(b=>b.paid>0 || b.billed>0);
+    const totalNet = traded.reduce((s2,b)=>s2+b.net, 0);
+    const best = traded.slice().sort((a,b)=>b.net-a.net)[0];
+    const worst = traded.slice().sort((a,b)=>a.net-b.net)[0];
+    const avg = traded.length ? totalNet/traded.length : 0;
+    const drawnInPeriod = state.pfdraw
+      .filter(d=>!!bk.days[d.date]).reduce((s2,d)=>s2+(Number(d.amount)||0), 0);
+
+    content.innerHTML = `
+      <div class="lg-card">
+        <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
+          <div><label style="margin-top:0">Date</label><input id="pf-nav-date" type="date" value="${pfViewDate}"></div>
+          <button class="lg-btn ghost small" id="pf-nav-prev" type="button">◀ Prev day</button>
+          <button class="lg-btn ghost small" id="pf-nav-today" type="button">Today</button>
+          <button class="lg-btn ghost small" id="pf-nav-next" type="button">Next day ▶</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">
+          Your ${Number(s.pfPct)||0}% share of each day's Net Profit collects here, and what you take out is
+          recorded against it. Taking money out is <b>not</b> an expense — it does not reduce profit, it only
+          reduces what is left of it, so nothing here changes any figure on the Summary or the Dashboard.
+        </div>
+      </div>
+
+      <div class="lg-grid cols-4">
+        <div class="lg-card lg-kpi teal"><div class="num">${naira(r.opening)}</div><div class="lbl">Carried in from ${fmtDate(shiftDate(pfViewDate,-1))}</div></div>
+        <div class="lg-card lg-kpi paid"><div class="num">${naira(r.inflow)}</div><div class="lbl">Profit share earned today</div></div>
+        <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${naira(r.available)}</div><div class="lbl">Available to take</div></div>
+        <div class="lg-card lg-kpi ${r.closing<0?'debt':'paid'}"><div class="num">${naira(r.closing)}</div><div class="lbl">Carries to ${fmtDate(shiftDate(pfViewDate,1))}</div></div>
+      </div>
+
+      ${r.closing<0 ? `<div class="lg-card" style="border-left:3px solid var(--clay);">
+        <div style="font-size:12.5px;color:var(--clay);font-weight:600;">You have taken ${naira(Math.abs(r.closing))} more than the profit share has earned.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">That shortfall carries forward until enough profit covers it. The money came from somewhere —
+        the CP or Expenses purse, or stock that has not been paid for — so it is worth knowing which.</div>
+      </div>` : ''}
+
+      <div class="lg-card">
+        <div class="lg-card-title">Record money taken out</div>
+        <datalist id="pf-reason-list">${PF_DRAW_REASONS.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
+        <div class="lg-grid cols-4">
+          <div><label style="margin-top:0">Date</label><input id="pf-dr-date" type="date" value="${pfViewDate}"></div>
+          <div><label style="margin-top:0">What for</label><input id="pf-dr-what" list="pf-reason-list" placeholder="e.g. Drawings, Savings"></div>
+          <div><label style="margin-top:0">Amount (₦)</label><input id="pf-dr-amount" type="number" min="0" value="0"></div>
+          <div><label style="margin-top:0">Taken as</label>
+            <select id="pf-dr-method">
+              <option value="">— choose —</option>
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank Transfer</option>
+            </select>
+          </div>
+        </div>
+        <div><label>Note</label><input id="pf-dr-note" placeholder="optional"></div>
+        <div style="margin-top:10px;"><button class="lg-btn" id="pf-dr-add" type="button">Record</button></div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Taken on ${fmtDate(pfViewDate)} (${dayRows.length}) — ${naira(r.spent)}</div>
+        ${!dayRows.length ? '<div class="lg-empty">Nothing taken out on this day.</div>' : `
+        <table><thead><tr><th>What for</th><th>Note</th><th class="num-col">Amount</th><th>Taken as</th><th></th></tr></thead>
+        <tbody>${dayRows.map(d=>`<tr>
+          <td>${esc(d.what)||'—'}</td>
+          <td class="muted">${esc(d.note)||'—'}</td>
+          <td class="num-col">${naira(d.amount)}</td>
+          <td>${esc(d.method)||'—'}</td>
+          <td><button class="subtle-link pf-dr-delete" data-id="${d.id}">remove</button></td>
+        </tr>`).join('')}
+        <tr style="font-weight:700;border-top:2px solid var(--ink);">
+          <td colspan="2">TOTAL TAKEN</td><td class="num-col">${naira(r.spent)}</td><td colspan="2"></td>
+        </tr>
+        </tbody></table>`}
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">${monthLabel} — Profit Purse, Day by Day</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">Each day's <b>Carried Forward</b> becomes the next day's <b>Carried In</b>. Click a date to jump to it.</div>
+        ${pfMonthTable(ym)}
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Profit day by day — ${periodLabel(pi)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
+          Every day the shop traded in this period, and what each one actually earned. Days with no trading are left out
+          so the average means something.
+        </div>
+        <div class="lg-grid cols-4" style="margin-bottom:10px;">
+          <div class="lg-card lg-kpi"><div class="num">${naira(totalNet)}</div><div class="lbl">Profit this period</div></div>
+          <div class="lg-card lg-kpi"><div class="num">${naira(avg)}</div><div class="lbl">Average trading day · ${traded.length} days</div></div>
+          <div class="lg-card lg-kpi paid"><div class="num">${best?naira(best.net):naira(0)}</div><div class="lbl">Best day${best?' · '+fmtDate(best.date):''}</div></div>
+          <div class="lg-card lg-kpi ${worst && worst.net===0?'debt':''}"><div class="num">${worst?naira(worst.net):naira(0)}</div><div class="lbl">Worst day${worst?' · '+fmtDate(worst.date):''}</div></div>
+        </div>
+        ${!traded.length ? '<div class="lg-empty">No trading recorded in this period yet.</div>' : `
+        <div style="overflow-x:auto;"><table><thead><tr>
+          <th>Day</th><th class="num-col">Collected</th><th class="num-col">Cost of prod.</th>
+          <th class="num-col">Material</th><th class="num-col">Net Profit</th>
+          <th class="num-col">Your ${Number(s.pfPct)||0}%</th><th class="num-col">vs average</th>
+        </tr></thead><tbody>
+        ${traded.map(b=>{
+          const gap = b.net - avg;
+          return `<tr>
+            <td><button class="subtle-link pf-jump" data-date="${b.date}">${fmtDate(b.date)}</button></td>
+            <td class="num-col">${naira(b.paid)}</td>
+            <td class="num-col muted">${naira(b.cp)}</td>
+            <td class="num-col muted">${naira(b.matUsed + b.matWaste)}</td>
+            <td class="num-col" style="font-weight:600;">${naira(b.net)}</td>
+            <td class="num-col">${naira(b.net * (Number(s.pfPct)||0) / 100)}</td>
+            <td class="num-col" style="color:${gap>=0?'var(--green)':'var(--clay)'};">${gap>=0?'+':'−'}${naira(Math.abs(gap))}</td>
+          </tr>`;
+        }).join('')}
+        <tr style="font-weight:700;border-top:2px solid var(--ink);">
+          <td>PERIOD TOTAL</td>
+          <td class="num-col">${naira(traded.reduce((s2,b)=>s2+b.paid,0))}</td>
+          <td class="num-col">${naira(traded.reduce((s2,b)=>s2+b.cp,0))}</td>
+          <td class="num-col">${naira(traded.reduce((s2,b)=>s2+b.matUsed+b.matWaste,0))}</td>
+          <td class="num-col">${naira(totalNet)}</td>
+          <td class="num-col">${naira(totalNet * (Number(s.pfPct)||0) / 100)}</td>
+          <td class="num-col muted">—</td>
+        </tr>
+        </tbody></table></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">
+          Of the ${naira(totalNet * (Number(s.pfPct)||0) / 100)} earned as your share this period, <b>${naira(drawnInPeriod)}</b> has been taken out.
+        </div>`}
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Profit Purse Setup</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          Set these once. <b>Opening float</b> is profit already set aside before the purse started.
+          <b>Start from</b> tells it to ignore everything before that date.
+        </div>
+        <div class="lg-grid cols-3">
+          <div><label style="margin-top:0">Opening float (₦)</label><input id="pf-float" type="number" value="${Number(s.pfOpeningFloat)||0}"></div>
+          <div><label style="margin-top:0">Start purse from</label><input id="pf-start" type="date" value="${esc(s.pfStartDate||'')}"></div>
+          <div style="align-self:end;" class="lg-row-actions">
+            <button class="lg-btn ghost small" id="pf-setup-save" type="button">Save setup</button>
+            ${s.pfStartDate?`<button class="lg-btn ghost small" id="pf-start-clear" type="button">Count all history</button>`:''}
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('pf-nav-date').addEventListener('change', (e)=>{ pfViewDate = e.target.value || todayISO(); renderProfit(); });
+    document.getElementById('pf-nav-prev').addEventListener('click', ()=>{ pfViewDate = shiftDate(pfViewDate,-1); renderProfit(); });
+    document.getElementById('pf-nav-next').addEventListener('click', ()=>{ pfViewDate = shiftDate(pfViewDate,1); renderProfit(); });
+    document.getElementById('pf-nav-today').addEventListener('click', ()=>{ pfViewDate = todayISO(); renderProfit(); });
+    document.querySelectorAll('.pf-jump').forEach(b=>{
+      b.addEventListener('click', ()=>{ pfViewDate = b.dataset.date; renderProfit(); });
+    });
+    document.getElementById('pf-dr-add').addEventListener('click', async ()=>{
+      const amount = Number(document.getElementById('pf-dr-amount').value)||0;
+      if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+      state.pfdraw.push({
+        id: uid(),
+        date: document.getElementById('pf-dr-date').value || pfViewDate,
+        what: document.getElementById('pf-dr-what').value.trim(),
+        amount,
+        method: document.getElementById('pf-dr-method').value,
+        note: document.getElementById('pf-dr-note').value.trim()
+      });
+      await save('pfdraw');
+      toast('Recorded — ' + naira(amount) + ' taken from profit');
+      renderProfit();
+    });
+    document.querySelectorAll('.pf-dr-delete').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        state.pfdraw = state.pfdraw.filter(d=>d.id!==btn.dataset.id);
+        await save('pfdraw');
+        toast('Removed');
+        renderProfit();
+      });
+    });
+    document.getElementById('pf-setup-save').addEventListener('click', async ()=>{
+      state.settings.pfOpeningFloat = Number(document.getElementById('pf-float').value)||0;
+      state.settings.pfStartDate = document.getElementById('pf-start').value || '';
+      await save('settings');
+      toast('Profit purse setup saved');
+      renderProfit();
+    });
+    const pfClear = document.getElementById('pf-start-clear');
+    if(pfClear) pfClear.addEventListener('click', async ()=>{
+      state.settings.pfStartDate = '';
+      await save('settings');
+      toast('Profit purse now counts all history');
+      renderProfit();
+    });
+  }
+  function pfMonthTable(ym){
+    const [yy, mm] = ym.split('-').map(Number);
+    const n = daysInMonth(yy, mm-1);
+    const pad = x=>String(x).padStart(2,'0');
+    let running = pfOpeningFor(`${ym}-01`);
+    const monthOpening = running;
+    let rows = '', inTotal = 0, outTotal = 0, shown = 0;
+    for(let d=1; d<=n; d++){
+      const date = `${ym}-${pad(d)}`;
+      const inflow = pfInflowFor(date);
+      const spent = pfSpentFor(date);
+      const opening = running;
+      running = opening + inflow - spent;
+      if(!inflow && !spent) continue;
+      shown++;
+      inTotal += inflow; outTotal += spent;
+      const isToday = date === pfViewDate;
+      rows += `<tr style="${isToday?'background:rgba(185,121,28,0.10);font-weight:600;':''}">
+        <td><button class="subtle-link pf-jump" data-date="${date}">${fmtDate(date)}</button></td>
+        <td class="num-col">${naira(opening)}</td>
+        <td class="num-col">${naira(inflow)}</td>
+        <td class="num-col">${naira(opening+inflow)}</td>
+        <td class="num-col">${naira(spent)}</td>
+        <td class="num-col ${running<0?'flag':''}">${naira(running)}</td>
+      </tr>`;
+    }
+    if(!shown) return `<div class="lg-empty">Nothing has moved through the profit purse this month yet.</div>`;
+    return `<div style="overflow-x:auto;"><table><thead><tr>
+      <th>Day</th><th class="num-col">Carried In</th><th class="num-col">Profit In</th>
+      <th class="num-col">Available</th><th class="num-col">Taken</th><th class="num-col">Carried Forward</th>
+    </tr></thead><tbody>
+      ${rows}
+      <tr style="font-weight:700;border-top:2px solid var(--ink);">
+        <td>MONTH TOTAL</td>
+        <td class="num-col">${naira(monthOpening)}</td>
+        <td class="num-col">${naira(inTotal)}</td>
+        <td class="num-col">—</td>
+        <td class="num-col">${naira(outTotal)}</td>
+        <td class="num-col ${running<0?'flag':''}">${naira(running)}</td>
+      </tr>
+    </tbody></table></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px;">Days where nothing was earned and nothing taken are skipped.</div>`;
+  }
+
   // ---------- OWED (what the shop owes other people) ----------
   let owedOpenId = null;
   let owedShowSettled = false;
