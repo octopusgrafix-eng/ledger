@@ -6174,6 +6174,12 @@
     allOldDebtPayments().forEach(p=>{ if(p.date) set.add(p.date); });
     state.exadjust.forEach(a=>{ if(a.date) set.add(a.date); });
     state.expenses.forEach(e=>{ if(e.date) set.add(e.date); });
+    // Borrowed money is an inflow to this purse, so the day it arrives is a day the purse
+    // moved. Without this, a loan landing on a day with no job, payment, adjustment or expense
+    // is added by exAutoForDate() and then never visited by exOpeningFor(), so the balance is
+    // short by the whole loan — and only on some screens, because the day-by-day table walks
+    // every calendar day and does see it. That is how the two disagreed by exactly ₦100,000.
+    state.payables.forEach(p=>{ if(p.kind==='loan' && p.date) set.add(p.date); });
     return Array.from(set).sort();
   }
   function exOpeningFor(dateStr){
