@@ -369,6 +369,9 @@
   /* Amber, not clay: this is a warning that something still has to be done, not a debt. */
   .no-mat-yet{font-size:10px;color:var(--amber);margin-top:3px;font-weight:600;}
   .no-mat-set{font-size:10px;color:var(--muted);margin-top:3px;}
+  .pl-recipe{background:rgba(185,121,28,0.05);border-radius:3px;padding:7px 9px;margin:2px 0 6px;}
+  .pl-recipe-head{font-size:11px;color:var(--muted);}
+  .pl-recipe-set{color:var(--teal);font-weight:600;margin-left:6px;}
   .wl-by{font-size:10px;color:var(--teal);text-decoration:none;white-space:nowrap;}
   .wl-item.is-done .wl-by{color:var(--muted);}
   /* The clock the floor put on this line, read back here. Clay once it's over the time they
@@ -4087,9 +4090,15 @@
       const bankV = Number(document.getElementById('nj-bank').value)||0;
       const rawTotalV = items.reduce((s,it)=>s+it.qty*it.unitPrice+it.descQty*it.descUnitPrice,0);
       const discountV = Math.min(Number(document.getElementById('nj-discount').value)||0, rawTotalV);
-      const materials = draftMaterials
+      const typedMaterials = draftMaterials
         .filter(m=>(m.name||'').trim() && (Number(m.qty)>0 || Number(m.waste)>0))
         .map(m=>({name:m.name.trim(), qty:Number(m.qty)||0, unitCost:Number(m.unitCost)||0, waste:Number(m.waste)||0}));
+      // Recipes fill in only what nobody typed. Anything entered by hand on this job is the
+      // person who ran it telling you what it actually took, which beats a standard every time
+      // — so a typed line is never overwritten, and recipes never run at all if any were typed.
+      const materials = typedMaterials.length
+        ? typedMaterials
+        : materialsFromRecipes({items});
       const job = {
         id: uid(),
         customerName, phone: document.getElementById('nj-phone').value.trim(),
@@ -4865,6 +4874,42 @@
   }
 
   // ---------- PRICE LIST ----------
+  // ---------- material recipes ----------
+  //
+  // A service consumes a known amount of stock: a 4ft banner is so many yards of flex, every
+  // time. The shop knows that; the ledger did not, so material had to be typed job by job and
+  // on the big jobs it simply wasn't. A recipe says it once, against the service on the price
+  // list, and every job billing that service can then be costed without anyone remembering.
+  //
+  // Quantities are PER UNIT of the service, so a recipe of 1.5 yd on a job billing 3 of them
+  // charges 4.5 yd. That is the only way one recipe can serve a job of any size.
+  function recipeOf(serviceName){
+    const p = state.pricelist.find(x=>normName(x.name)===normName(serviceName));
+    return (p && Array.isArray(p.recipe)) ? p.recipe.filter(r=>r && r.name && (Number(r.per)||0)>0) : [];
+  }
+  function hasAnyRecipe(){ return state.pricelist.some(p=>Array.isArray(p.recipe) && p.recipe.length); }
+  // What a job's items add up to under the recipes, as material lines. Same shape the manual
+  // form produces, so everything downstream — purse, profit, stock — treats them identically.
+  function materialsFromRecipes(j){
+    const acc = new Map();
+    (j.items||[]).forEach(it=>{
+      const units = (Number(it.qty)||0) + (Number(it.descQty)||0);
+      if(units <= 0) return;
+      recipeOf(it.service).forEach(r=>{
+        const key = normName(r.name);
+        const qty = units * (Number(r.per)||0);
+        if(!acc.has(key)){
+          const known = state.materials.find(m=>normName(m.name)===key);
+          acc.set(key, {name: r.name, qty: 0, unitCost: known ? Number(known.unitCost)||0 : 0, waste: 0});
+        }
+        acc.get(key).qty += qty;
+      });
+    });
+    // Rounded to two places: a recipe of 0.15 across seven units otherwise stores a figure with
+    // fifteen decimals that no one can reconcile against a shelf.
+    return Array.from(acc.values()).map(m=>({...m, qty: Math.round(m.qty*100)/100}));
+  }
+
   function renderPrices(){
     content.innerHTML = `
       <div class="lg-card">
@@ -4877,6 +4922,25 @@
         </div>
         <div style="margin-top:10px;"><button class="lg-btn" id="pl-add">Add Service</button></div>
       </div>
+      ${(()=>{
+        // Recipes are only worth setting up if they can also repair what is already recorded.
+        const missing = state.jobs.filter(j=>!jobMaterialSettled(j));
+        const fixable = missing.filter(j=>materialsFromRecipes(j).length);
+        if(!hasAnyRecipe() && !missing.length) return '';
+        return `<div class="lg-card" style="border-left:3px solid var(--amber);">
+          <div class="lg-card-title">Fill in the jobs that have no material</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
+            <b>${missing.length}</b> job${missing.length===1?'':'s'} in the whole ledger have no material recorded and
+            have not been marked as using none. With the recipes set above, <b>${fixable.length}</b> of them can be
+            costed from what they billed. The rest bill services with no recipe — set one, or mark those jobs as
+            using no material on the job itself.
+            <br><br>This only ever <b>adds</b> to a job that has nothing; a job where somebody typed the material is
+            never touched.
+          </div>
+          <button class="lg-btn ${fixable.length?'':'ghost'} small" id="pl-backfill" type="button"
+            ${fixable.length?'':'disabled'}>Apply recipes to ${fixable.length} job${fixable.length===1?'':'s'}</button>
+        </div>`;
+      })()}
       <div class="lg-card">
         <div class="lg-card-title">Current Price List (${state.pricelist.length})</div>
         <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
@@ -4885,6 +4949,28 @@
         <div id="pl-table"></div>
       </div>
     `;
+    const backfillBtn = document.getElementById('pl-backfill');
+    if(backfillBtn) backfillBtn.addEventListener('click', async ()=>{
+      const fixable = state.jobs.filter(j=>!jobMaterialSettled(j) && materialsFromRecipes(j).length);
+      if(!fixable.length) return;
+      const value = fixable.reduce((s,j)=>s+jobTotals(j).materialUsedCost, 0);
+      const preview = fixable.map(j=>({j, mats: materialsFromRecipes(j)}));
+      const cost = preview.reduce((s,x)=>s+x.mats.reduce((a,m)=>a+m.qty*m.unitCost,0), 0);
+      const sample = preview.slice(0,5)
+        .map(x=>`  ${x.j.customerName} — ${x.mats.map(m=>m.name+' ×'+m.qty).join(', ')}`).join('\n');
+      if(!confirm(
+        `Cost ${fixable.length} job${fixable.length===1?'':'s'} from the recipes?\n\n` +
+        `This adds about ${naira(cost)} of material across them, which will reduce Net Profit by the ` +
+        `same amount and change the PF/EX split for the days those jobs were taken in.\n\n` +
+        `For example:\n${sample}${preview.length>5?'\n  …and '+(preview.length-5)+' more':''}\n\n` +
+        `Only jobs with nothing recorded are touched. There is no undo, but you can edit or remove ` +
+        `material on any job afterwards.`
+      )) return;
+      preview.forEach(x=>{ x.j.materials = x.mats; x.j.materialsFromRecipe = true; });
+      await save('jobs');
+      toast(`${fixable.length} job${fixable.length===1?'':'s'} costed from recipes — ${naira(cost)} of material`);
+      renderPrices();
+    });
     document.getElementById('pl-add').addEventListener('click', async ()=>{
       const name = document.getElementById('pl-name').value.trim();
       const price = Number(document.getElementById('pl-price').value)||0;
@@ -4920,9 +5006,72 @@
           <td style="width:15%"><button class="lg-btn ghost small pl-save">Save</button></td>
           <td style="width:15%"><button class="lg-btn danger small pl-delete">Delete</button></td>
         </tr>
+        <tr data-id="${p.id}">
+          <td colspan="7" style="padding-top:0;border-bottom:1px solid var(--rule);">
+            ${(()=>{
+              const rec = Array.isArray(p.recipe) ? p.recipe : [];
+              return `<div class="pl-recipe">
+                <div class="pl-recipe-head">
+                  Material per <b>1 ${esc(p.unit||'unit')}</b> of ${esc(p.name)}
+                  ${rec.length ? `<span class="pl-recipe-set">${rec.map(r=>esc(r.name)+' ×'+r.per).join(' · ')}</span>`
+                               : '<span class="muted">— none set, so jobs billing this are not costed automatically</span>'}
+                </div>
+                <div class="lg-grid cols-3" style="margin-top:4px;">
+                  <div><input class="pl-rec-name" list="pl-mat-list" placeholder="material"></div>
+                  <div><input class="pl-rec-per" type="number" min="0" step="0.01" placeholder="qty per unit"></div>
+                  <div class="lg-row-actions">
+                    <button class="lg-btn ghost small pl-rec-add" data-id="${p.id}" type="button">Add to recipe</button>
+                    ${rec.length ? `<button class="subtle-link pl-rec-clear" data-id="${p.id}">clear</button>` : ''}
+                  </div>
+                </div>
+              </div>`;
+            })()}
+          </td>
+        </tr>
       `).join('')}
       </tbody></table>
     `).join('');
+    // One datalist for every recipe row, so material names are picked rather than retyped —
+    // a typo here would create a second material and silently split the stock.
+    wrap.insertAdjacentHTML('beforeend',
+      `<datalist id="pl-mat-list">${state.materials.map(m=>`<option value="${esc(m.name)}">`).join('')}</datalist>`);
+    wrap.querySelectorAll('.pl-rec-add').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const tr = btn.closest('tr');
+        const p = state.pricelist.find(x=>x.id===btn.dataset.id);
+        if(!p) return;
+        const name = tr.querySelector('.pl-rec-name').value.trim();
+        const per = Number(tr.querySelector('.pl-rec-per').value)||0;
+        if(!name){ toast('Enter which material'); return; }
+        if(per<=0){ toast('Enter how much of it, per unit'); return; }
+        p.recipe = Array.isArray(p.recipe) ? p.recipe : [];
+        const existing = p.recipe.find(r=>normName(r.name)===normName(name));
+        if(existing) existing.per = per; else p.recipe.push({name, per});
+        // A material named only in a recipe still has to exist on Inventory, or the stock it
+        // gets charged has nowhere to come from.
+        let mats = false;
+        if(!state.materials.some(m=>normName(m.name)===normName(name))){
+          state.materials.push({id: uid(), name, unit:'unit', unitCost:0, opening:0, restocked:0,
+                                purchases:[], reorderLevel:0});
+          mats = true;
+        }
+        await saveMany(mats ? ['pricelist','materials'] : ['pricelist']);
+        toast(`${p.name}: ${per} ${name} per ${p.unit||'unit'}`);
+        // Whole tab, not just the table: a new recipe changes how many jobs the backfill card
+        // above can cost, and redrawing only the table leaves that count stale and wrong.
+        renderPrices();
+      });
+    });
+    wrap.querySelectorAll('.pl-rec-clear').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const p = state.pricelist.find(x=>x.id===btn.dataset.id);
+        if(!p) return;
+        p.recipe = [];
+        await save('pricelist');
+        toast(p.name + ' — recipe cleared');
+        renderPrices();
+      });
+    });
     wrap.querySelectorAll('.pl-save').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const tr = btn.closest('tr'); const id = tr.dataset.id;
