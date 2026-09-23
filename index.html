@@ -4430,6 +4430,12 @@
   function renderCPForm(j){
     return `<div class="pay-form" data-id="${j.id}" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--rule);">
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Cost of Production is often only known once the job is done. Operator and promised date can be filled in or changed here too.</div>
+      <div class="lg-grid cols-2" style="margin-bottom:6px;">
+        <div><label style="margin-top:0">Customer Name</label><input class="cp-customer" value="${esc(j.customerName||'')}" list="lg-cp-customer-list" placeholder="type, or pick a saved customer"></div>
+        <div><label style="margin-top:0">Phone</label><input class="cp-phone" value="${esc(j.phone||'')}" placeholder="optional"></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin:-2px 0 6px;">Renames this job only. Walk-in numbers get reused, so other jobs under the same name are left alone.</div>
+      <datalist id="lg-cp-customer-list">${state.customers.filter(c=>!isCounterSale(c.name)).map(c=>`<option value="${esc(c.name)}">`).join('')}</datalist>
       <div class="lg-grid cols-3">
         <div><label style="margin-top:0">Cost of Production (\u20a6)</label><input class="cp-value" type="number" min="0" value="${Number(j.cp)||0}"></div>
         <div><label style="margin-top:0">Operator</label><input class="cp-operator" value="${esc(j.operator||'')}" list="lg-operator-list" placeholder="who's handling it"></div>
@@ -4854,11 +4860,20 @@
         const cp = Number(form.querySelector('.cp-value').value)||0;
         const j = state.jobs.find(j=>j.id===btn.dataset.id);
         if(!j) return;
+        // A job taken in as "Walk-in Customer 6" before anyone knew her name gets its real
+        // owner here. Only this job moves: numbered walk-ins end up on unrelated sales, so a
+        // roster-wide rename would hand one person's history to someone else. A blank name
+        // is ignored rather than turning the job into an anonymous bucket entry.
+        const newName = form.querySelector('.cp-customer').value.trim().replace(/\s+/g,' ');
+        const renamed = newName && normName(newName) !== normName(j.customerName);
+        if(renamed) j.customerName = newName;
+        j.phone = form.querySelector('.cp-phone').value.trim();
         j.cp = cp;
         j.operator = form.querySelector('.cp-operator').value.trim();
         j.dueDate = form.querySelector('.cp-due').value || '';
-        await save('jobs');
-        toast('Details saved — CP ' + naira(cp));
+        recomputeAllCustomers();
+        await saveMany(['jobs','customers']);
+        toast(renamed ? 'Details saved — job now under ' + newName : 'Details saved — CP ' + naira(cp));
         openCPId = null;
         reRender();
       });
