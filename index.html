@@ -231,6 +231,29 @@
   .material-row{display:grid;grid-template-columns:1.5fr 0.7fr 0.7fr 0.9fr 0.9fr auto;gap:6px;align-items:end;margin-bottom:6px;}
   @media(max-width:700px){.material-row{grid-template-columns:1fr 1fr;}}
   .flag{color:var(--clay);font-weight:600;}
+  /* Job Calc: one bordered block per line, the mode switch leading it. */
+  .jc-line{border:1px solid var(--rule);border-radius:6px;padding:10px;margin-bottom:8px;}
+  .jc-line-head{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;}
+  @media(max-width:560px){.jc-line-head{grid-template-columns:1fr auto;} .jc-line-head .jc-service{grid-column:1/-1;grid-row:2;}}
+  .jc-mode{display:inline-flex;border:1px solid var(--ink);border-radius:5px;overflow:hidden;}
+  .jc-mode-btn{background:transparent;border:0;padding:6px 10px;font-family:var(--font-mono);font-size:12px;cursor:pointer;color:var(--ink);white-space:nowrap;}
+  .jc-mode-btn.on{background:var(--ok-deep);color:#fff;}
+  .jc-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px 8px;align-items:end;}
+  .jc-amt{font-family:var(--font-mono);font-size:13.5px;padding:7px 2px;font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;}
+  .jc-spec{font-size:11px;color:var(--muted);margin-top:4px;min-height:14px;}
+  .jc-break{width:100%;max-width:420px;}
+  .jc-break td{padding:4px 2px;font-variant-numeric:tabular-nums;}
+  .jc-target{margin-top:14px;padding-top:12px;border-top:1px dashed var(--rule);}
+  .jc-pricing{font-size:11.5px;margin-top:4px;line-height:1.6;}
+  .jc-good{color:var(--green);}
+  .jc-warn{color:var(--clay);font-size:11.5px;font-weight:600;}
+  .jc-howto-svc{margin-bottom:8px;font-size:13px;}
+  .jc-howto-svc ol{margin:4px 0 6px;padding-left:22px;font-size:12.5px;line-height:1.6;}
+  /* Price List: each service's costing, folded away under its recipe. */
+  .pl-profile{background:rgba(17,49,244,0.04);border-radius:3px;padding:7px 9px;margin:0 0 8px;}
+  .pl-profile > summary{cursor:pointer;font-size:11px;color:var(--ok-blue);font-weight:600;}
+  .pl-profile > summary .muted{font-weight:400;}
+  .pl-profile textarea{min-height:84px;}
   .subtle-link{background:none;border:none;color:var(--ok-blue);text-decoration:underline;cursor:pointer;font-family:var(--font-mono);font-size:12px;padding:0;
     transition:color 140ms ease, transform 120ms var(--ease-out);}
   .subtle-link:active{transform:scale(0.96);}
@@ -566,6 +589,9 @@
     /* Wide data tables scroll inside their own card instead of stretching the page. */
     .lg-card{overflow-x:auto;-webkit-overflow-scrolling:touch;}
     .lg-card table{min-width:560px;}
+    .lg-card .jc-break{min-width:0;}
+    /* The costing panel sits in the price table's scrolling row; keep it on screen and phone-wide. */
+    .pl-profile{position:sticky;left:0;max-width:calc(100vw - 64px);}   /* two columns — fits a phone, and the figures are the point */
     /* 16px prevents iOS Safari from auto-zooming when a field is focused. */
     input,select,textarea{font-size:16px;}
   }
@@ -683,6 +709,7 @@
     {id:'dayview', label:'Daily View'},
     {id:'summary', label:'Summary'},
     {id:'newjob', label:'New Job'},
+    {id:'calc', label:'Job Calc'},
     {id:'jobs', label:'Jobs'},
     {id:'pending', label:'Pending Jobs'},
     {id:'quotes', label:'Quotes'},
@@ -2722,6 +2749,7 @@
     else if(state.tab==='dayview') renderDayView();
     else if(state.tab==='summary') renderSummary();
     else if(state.tab==='newjob') renderNewJob();
+    else if(state.tab==='calc') renderCalc();
     else if(state.tab==='jobs') renderJobs();
     else if(state.tab==='pending') renderPending();
     else if(state.tab==='prices') renderPrices();
@@ -3795,6 +3823,7 @@
   // ---------- NEW JOB ----------
   let draftItems = [{service:'', category:'', qty:1, unit:'', unitPrice:0, desc:'', descQty:0, descUnit:'', descUnitPrice:0}];
   let draftMaterials = [{name:'', qty:0, unitCost:0, waste:0}];
+  let draftExtras = null;   // {desc, discount, cp, due} from the Job Calc tab, applied once by renderNewJob
   function renderNewJob(){
     content.innerHTML = `
       <div class="lg-card">
@@ -3983,6 +4012,16 @@
     document.getElementById('nj-cash').addEventListener('input', recalcTotals);
     document.getElementById('nj-bank').addEventListener('input', recalcTotals);
     document.getElementById('nj-discount').addEventListener('input', recalcTotals);
+    // Handed over from the Job Calc tab: the figures that live outside draftItems/draftMaterials.
+    // Consumed once, so the next visit to New Job starts clean.
+    if(draftExtras){
+      document.getElementById('nj-desc').value = draftExtras.desc || '';
+      document.getElementById('nj-discount').value = draftExtras.discount || 0;
+      document.getElementById('nj-cp').value = draftExtras.cp || 0;
+      if(draftExtras.due) document.getElementById('nj-due').value = draftExtras.due;
+      if(draftExtras.cp>0 || draftMaterials.some(m=>(m.name||'').trim())) content.querySelector('.lg-more').open = true;
+      draftExtras = null;
+    }
     recalcTotals();
 
     // Materials Used: one row per material, unit cost auto-fills from Material Prices when the
@@ -4152,6 +4191,557 @@
       }
       });
     });
+  }
+
+  // ---------- SERVICE COSTING ----------
+  //
+  // How the shop charges for each service, said once on the Price List and read by Job Calc:
+  // what it's charged by (unit or sq ft), what it costs to produce, what it consumes (the
+  // recipe), how long it takes, the steps, the bulk discounts, and the LAST PRICE — the
+  // lowest the shop will take, which is cost plus a minimum margin.
+  //
+  // Every figure is PER UNIT of the service (per sq ft for a service charged by size), the
+  // same basis as the recipes, so one profile serves a job of any size.
+  //
+  // Bulk discounts and the minimum margin have shop-wide defaults (in settings, falling back
+  // to the constants below — nothing is written until the owner saves) and any service can
+  // override them. A bulk discount never takes a price below the last price.
+  const DEFAULT_BULK_TIERS = [{from:100, off:5}, {from:500, off:10}, {from:1000, off:15}];
+  const DEFAULT_MIN_MARGIN = 20;
+  function serviceOf(name){ return (name && state.pricelist.find(p=>normName(p.name)===normName(name))) || null; }
+  function blankish(v){ return v===undefined || v===null || v===''; }
+  function shopTiers(){ return Array.isArray(state.settings.bulkTiers) ? state.settings.bulkTiers : DEFAULT_BULK_TIERS; }
+  function shopMinMargin(){ return blankish(state.settings.minMarginPct) ? DEFAULT_MIN_MARGIN : Number(state.settings.minMarginPct)||0; }
+  function tiersOf(p){ return (p && Array.isArray(p.tiers) && p.tiers.length) ? p.tiers : shopTiers(); }
+  function minMarginOf(p){ return (p && !blankish(p.minMargin)) ? Number(p.minMargin)||0 : shopMinMargin(); }
+  // "100:5, 500:10" → from 100 units, 5% off; from 500, 10% off. Forgiving about separators,
+  // strict about sense: a tier must start above zero and take off something less than all of it.
+  function parseTiers(txt){
+    return String(txt||'').split(/[,;\n]+/).map(s=>s.trim()).filter(Boolean).map(s=>{
+      const m = s.match(/^(\d+(?:\.\d+)?)\s*(?:\+|:|=|→|->|at)?\s*(\d+(?:\.\d+)?)\s*%?$/i);
+      return m ? {from:Number(m[1]), off:Number(m[2])} : null;
+    }).filter(t=>t && t.from>0 && t.off>0 && t.off<100).sort((a,b)=>a.from-b.from);
+  }
+  function tiersText(t){ return (t||[]).map(x=>x.from+':'+x.off).join(', '); }
+  function tiersHuman(t){ return (t||[]).length ? t.map(x=>`${x.from}+ → ${x.off}% off`).join(' · ') : 'no bulk discount'; }
+  function unitCostOf(p){
+    const cp = Number(p && p.cpPer)||0;
+    const mat = recipeOf(p ? p.name : '').reduce((s,r)=>{
+      const m = state.materials.find(mm=>normName(mm.name)===normName(r.name));
+      return s + (Number(r.per)||0)*(m ? Number(m.unitCost)||0 : 0);
+    }, 0);
+    return {cp, mat, total: cp+mat};
+  }
+  // Rounded UP to the naira: a last price that rounds down is a price that loses money.
+  function lastPriceOf(p){
+    const c = unitCostOf(p).total;
+    const mm = Math.min(Math.max(minMarginOf(p),0), 95);
+    return c>0 ? Math.ceil(c/(1-mm/100)) : 0;
+  }
+  function tierFor(p, units){ let hit = null; tiersOf(p).forEach(t=>{ if(units>=t.from) hit = t; }); return hit; }
+  // A normal order takes the turnaround; a big one takes as many days as the shop needs to
+  // produce it at its daily rate — whichever is longer.
+  function daysFor(p, units){
+    if(!p) return 0;
+    const lead = Number(p.leadDays)||0, per = Number(p.perDay)||0;
+    return Math.max(lead, (per>0 && units>0) ? Math.ceil(units/per) : 0);
+  }
+  function isWorkDayISO(iso){ return !!state.settings.targetWorksSundays || new Date(iso+'T00:00:00').getDay()!==0; }
+  function addWorkDays(iso, n){
+    let d = iso, left = Math.ceil(n);
+    while(left>0){ d = shiftDate(d,1); if(isWorkDayISO(d)) left--; }
+    return d;
+  }
+  function stepsOf(p){ return (p && Array.isArray(p.steps)) ? p.steps.filter(s=>String(s).trim()) : []; }
+  function hasCosting(p){ return !!p && (Number(p.cpPer)>0 || recipeOf(p.name).length>0 || Number(p.leadDays)>0 || Number(p.perDay)>0 || stepsOf(p).length>0 || (Array.isArray(p.tiers)&&p.tiers.length>0) || !blankish(p.minMargin) || p.chargeBy==='sqft'); }
+
+  // ---------- JOB CALC ----------
+  //
+  // The calculation sheet: work out what a job should cost the customer and what it will
+  // cost the shop, before anything is saved. Nothing here touches the books — it lives in
+  // memory until "Send to New Job" hands it over as an ordinary draft.
+  //
+  // Pick a service and the sheet fills itself from that service's costing: how it's charged,
+  // the list price, the bulk discount for this quantity, the last price, CP, materials, time
+  // and steps. Anything can still be overridden — an agreed price per line, CP, materials.
+  //
+  // Profit is the ledger's own formula, not a new one: price − CP − material used − wasted.
+  // That is what this job would add to Net Profit, so the two can never disagree.
+  const CALC_LEN = {ft:1, in:1/12, m:3.28084, cm:0.0328084};   // → feet
+  function newCalcLine(){ return {mode:'qty', service:'', w:'', h:'', len:'ft', copies:1, qty:1, rate:0, agreed:''}; }
+  function newCalcSheet(){ return {lines:[newCalcLine()], materials:[], materialsEdited:false, cp:0, cpEdited:false, discount:0, target:'', desc:''}; }
+  let calcSheet = newCalcSheet();
+
+  function calcLineFigures(l){
+    const p = serviceOf(l.service);
+    let units, sqft = 0;
+    if(l.mode==='size'){
+      const f = CALC_LEN[l.len] || 1;
+      sqft = (Number(l.w)||0)*f * (Number(l.h)||0)*f;
+      // Two places, the same rounding the recipes use, so the units sent to New Job are
+      // the units the amount was worked out on.
+      units = Math.round(sqft*(Number(l.copies)||0)*100)/100;
+    } else {
+      units = Number(l.qty)||0;
+    }
+    const list = Number(l.rate)||0;
+    const last = p ? lastPriceOf(p) : 0;
+    const tier = tierFor(p, units);
+    let bulk = list, clamped = false;
+    if(tier){
+      bulk = Math.round(list*(1-tier.off/100));
+      // Never below the last price — but never above the list price either, if the list
+      // price itself is already under it (that gets its own warning).
+      const floor = Math.min(last, list);
+      if(bulk < floor){ bulk = floor; clamped = true; }
+    }
+    const agreed = blankish(l.agreed) ? null : Number(l.agreed)||0;
+    const unitRate = agreed!=null ? agreed : bulk;
+    return {
+      p, units, sqft, list, last, tier, bulk, clamped, agreed, unitRate,
+      amount: units*unitRate,
+      discount: Math.max(units*(list-unitRate), 0),
+      unitLabel: l.mode==='size' ? 'sq ft' : '',
+      belowLast: last>0 && unitRate>0 && unitRate < last,
+      listBelowLast: last>0 && list>0 && list < last,
+      days: daysFor(p, units),
+    };
+  }
+  function calcLineSpec(l, fig){
+    if(l.mode==='size'){
+      const sq = Math.round(fig.sqft*100)/100;
+      return `${Number(l.w)||0} × ${Number(l.h)||0} ${l.len} = ${sq} sq ft` + ((Number(l.copies)||0)!==1 ? ` × ${Number(l.copies)||0} copies = ${fig.units} sq ft` : '');
+    }
+    return `${fig.units} × ${naira(fig.unitRate)}`
+      + (fig.agreed!=null ? ' (agreed price)' : fig.tier ? ` (bulk ${fig.tier.off}% off)` : '');
+  }
+  function calcRecipeMaterials(){
+    const items = calcSheet.lines.map(l=>({service:l.service, qty: calcLineFigures(l).units}));
+    const fresh = materialsFromRecipes({items});
+    // Keep any waste already typed against a material that's still there.
+    return fresh.map(m=>{
+      const was = calcSheet.materials.find(x=>normName(x.name)===normName(m.name));
+      return was ? {...m, waste: was.waste} : m;
+    });
+  }
+  function calcServiceCP(){
+    return Math.round(calcSheet.lines.reduce((s,l)=>{
+      const fig = calcLineFigures(l);
+      return s + (fig.p ? (Number(fig.p.cpPer)||0)*fig.units : 0);
+    }, 0));
+  }
+  function calcTotals(){
+    const figs = calcSheet.lines.map(calcLineFigures);
+    const subtotal = figs.reduce((s,f)=>s+f.amount, 0);
+    const listTotal = figs.reduce((s,f)=>s+f.units*f.list, 0);
+    const bulkOff = figs.reduce((s,f)=>s+f.discount, 0);
+    const discount = Math.min(Number(calcSheet.discount)||0, subtotal);
+    const price = Math.max(subtotal - discount, 0);
+    const matUsed  = calcSheet.materials.reduce((s,m)=>s+(Number(m.qty)||0)*(Number(m.unitCost)||0), 0);
+    const matWaste = calcSheet.materials.reduce((s,m)=>s+(Number(m.waste)||0)*(Number(m.unitCost)||0), 0);
+    const cp = Number(calcSheet.cp)||0;
+    const cost = cp + matUsed + matWaste;
+    const profit = price - cost;
+    const margin = price>0 ? profit/price*100 : null;
+    const t = Number(calcSheet.target)||0;
+    const needed = (t>0 && t<100) ? cost/(1-t/100) : null;
+    // The last price for the whole job, on this sheet's actual costs (CP and materials as
+    // they stand, waste included) and the shop's minimum margin.
+    const mm = Math.min(Math.max(shopMinMargin(),0),95);
+    const lastJob = cost>0 ? Math.ceil(cost/(1-mm/100)) : 0;
+    const days = figs.reduce((m,f)=>Math.max(m, f.days), 0);
+    return {figs, subtotal, listTotal, bulkOff, discount, price, matUsed, matWaste, cp, cost, profit, margin, needed, lastJob, minMargin: mm, days};
+  }
+
+  function renderCalc(){
+    content.innerHTML = `
+      <div class="lg-card">
+        <div class="lg-card-title">Oktopus Job Calculation Sheet</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+          Pick a service and the sheet fills itself from its costing on the Price List: price, bulk discount, last price,
+          cost of production, materials, time and steps. Nothing here is saved to the books until you send it to New Job.
+        </div>
+        <datalist id="jc-service-list">${state.pricelist.map(p=>`<option value="${esc(p.name)}">${naira(p.price)}${p.chargeBy==='sqft'?' / sq ft':p.unit?' / '+esc(p.unit):''}</option>`).join('')}</datalist>
+        <div id="jc-lines"></div>
+        <button class="lg-btn ghost small" id="jc-add-line" type="button">+ Add line</button>
+        <div class="lg-grid cols-2" style="margin-top:12px;">
+          <div><label style="margin-top:0">Job description / notes</label><input id="jc-desc" value="${esc(calcSheet.desc)}" placeholder="e.g. 2 flex banners + 500 flyers"></div>
+          <div><label style="margin-top:0">Extra discount (₦)</label><input id="jc-discount" type="number" min="0" value="${Number(calcSheet.discount)||0}">
+            <div style="font-size:10.5px;color:var(--muted);margin-top:3px;">On top of any bulk discount already in the lines.</div></div>
+        </div>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-card-title">Cost to the shop</div>
+        <div class="lg-grid cols-2">
+          <div><label style="margin-top:0">Cost of production (CP) <span id="jc-cp-source" style="text-transform:none;letter-spacing:0;"></span></label><input id="jc-cp" type="number" min="0" value="${Number(calcSheet.cp)||0}">
+            <div style="font-size:10.5px;color:var(--muted);margin-top:3px;">Outsourcing, design, labour: what gets paid out for this job, excluding stock.</div></div>
+          <div></div>
+        </div>
+        <label style="margin-top:14px;">Materials <span id="jc-mat-source" style="text-transform:none;letter-spacing:0;"></span></label>
+        <datalist id="jc-material-list">${state.materials.map(m=>`<option value="${esc(m.name)}">`).join('')}</datalist>
+        <div id="jc-materials"></div>
+        <button class="lg-btn ghost small" id="jc-add-material" type="button">+ Add material</button>
+      </div>
+
+      <div class="lg-card" id="jc-result"></div>
+      <div class="lg-card" id="jc-howto"></div>
+
+      <div class="lg-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <div style="font-size:11px;color:var(--muted);max-width:52ch;">Send to New Job fills in the items, materials, CP, discount, notes and due date. Add the customer and payment there, then save.</div>
+          <div class="lg-row-actions">
+            <button class="lg-btn ghost" id="jc-clear" type="button">Clear sheet</button>
+            <button class="lg-btn" id="jc-send" type="button">Send to New Job</button>
+          </div>
+        </div>
+      </div>
+    `;
+    renderCalcLines();
+    if(!calcSheet.cpEdited) calcSheet.cp = calcServiceCP();
+    document.getElementById('jc-cp').value = Number(calcSheet.cp)||0;
+    renderCalcCPSource();
+    if(!calcSheet.materialsEdited) calcSheet.materials = calcRecipeMaterials();
+    renderCalcMaterials();
+    renderCalcResult();
+    renderCalcHowTo();
+
+    document.getElementById('jc-add-line').addEventListener('click', ()=>{ calcSheet.lines.push(newCalcLine()); renderCalcLines(); calcRefresh(); });
+    document.getElementById('jc-add-material').addEventListener('click', ()=>{
+      calcSheet.materialsEdited = true;
+      calcSheet.materials.push({name:'', qty:0, unitCost:0, waste:0});
+      renderCalcMaterials();
+    });
+    document.getElementById('jc-desc').addEventListener('input', e=>{ calcSheet.desc = e.target.value; });
+    document.getElementById('jc-discount').addEventListener('input', e=>{ calcSheet.discount = e.target.value; renderCalcResult(); });
+    document.getElementById('jc-cp').addEventListener('input', e=>{
+      calcSheet.cp = e.target.value;
+      if(!calcSheet.cpEdited){ calcSheet.cpEdited = true; renderCalcCPSource(); }
+      renderCalcResult();
+    });
+    document.getElementById('jc-clear').addEventListener('click', ()=>{ calcSheet = newCalcSheet(); renderCalc(); });
+    document.getElementById('jc-send').addEventListener('click', sendCalcToNewJob);
+  }
+
+  // Figures that change while typing are written with textContent — the lines and material
+  // rows are never rebuilt under the cursor. The service-driven parts (CP, materials) are
+  // rebuilt, but those are never the thing being typed in when a line changes.
+  function calcRefresh(){
+    if(!calcSheet.cpEdited){
+      calcSheet.cp = calcServiceCP();
+      const cpInp = document.getElementById('jc-cp');
+      if(cpInp && document.activeElement!==cpInp) cpInp.value = calcSheet.cp;
+    }
+    if(!calcSheet.materialsEdited){ calcSheet.materials = calcRecipeMaterials(); renderCalcMaterials(); }
+    renderCalcResult();
+    renderCalcHowTo();
+  }
+  function renderCalcCPSource(){
+    const src = document.getElementById('jc-cp-source');
+    if(!src) return;
+    if(calcSheet.cpEdited){
+      src.innerHTML = `— typed in. <button type="button" class="subtle-link" id="jc-cp-reset">Use the services' CP</button>`;
+      document.getElementById('jc-cp-reset').addEventListener('click', ()=>{
+        calcSheet.cpEdited = false; calcSheet.cp = calcServiceCP();
+        document.getElementById('jc-cp').value = calcSheet.cp;
+        renderCalcCPSource(); renderCalcResult();
+      });
+    } else {
+      src.textContent = '— from each service’s CP per unit';
+    }
+  }
+
+  function renderCalcLines(){
+    const wrap = document.getElementById('jc-lines');
+    wrap.innerHTML = calcSheet.lines.map((l,idx)=>{
+      const size = l.mode==='size';
+      return `
+      <div class="jc-line" data-idx="${idx}">
+        <div class="jc-line-head">
+          <div class="jc-mode" role="group" aria-label="Charge this line by">
+            <button type="button" class="jc-mode-btn ${size?'':'on'}" data-mode="qty">By quantity</button>
+            <button type="button" class="jc-mode-btn ${size?'on':''}" data-mode="size">By size</button>
+          </div>
+          <input class="jc-service" list="jc-service-list" value="${esc(l.service)}" placeholder="service: type, or pick from your price list">
+          <button class="lg-btn danger small jc-remove" type="button" title="Remove line">✕</button>
+        </div>
+        <div class="jc-fields">
+          ${size ? `
+            <div><label>Width</label><input class="jc-w" type="number" min="0" step="any" value="${esc(l.w)}"></div>
+            <div><label>Height</label><input class="jc-h" type="number" min="0" step="any" value="${esc(l.h)}"></div>
+            <div><label>Measured in</label><select class="jc-len">${Object.keys(CALC_LEN).map(u=>`<option value="${u}" ${l.len===u?'selected':''}>${u}</option>`).join('')}</select></div>
+            <div><label>Copies</label><input class="jc-copies" type="number" min="0" value="${esc(l.copies)}"></div>
+            <div><label>List price / sq ft</label><input class="jc-rate" type="number" min="0" step="any" value="${esc(l.rate)}"></div>
+          ` : `
+            <div><label>Quantity</label><input class="jc-qty" type="number" min="0" value="${esc(l.qty)}"></div>
+            <div><label>List price / unit</label><input class="jc-rate" type="number" min="0" step="any" value="${esc(l.rate)}"></div>
+          `}
+          <div><label>Agreed price / ${size?'sq ft':'unit'}</label><input class="jc-agreed" type="number" min="0" step="any" value="${esc(l.agreed)}" placeholder="optional"></div>
+          <div><label>Amount</label><div class="jc-amt">₦0</div></div>
+        </div>
+        <div class="jc-spec"></div>
+        <div class="jc-pricing"></div>
+      </div>`;
+    }).join('');
+
+    wrap.querySelectorAll('.jc-line').forEach(row=>{
+      const idx = Number(row.dataset.idx);
+      const l = calcSheet.lines[idx];
+      const bind = (sel, key)=>{ const el = row.querySelector(sel); if(el) el.addEventListener('input', ()=>{ l[key] = el.value; updateCalcLine(row, l); calcRefresh(); }); };
+      bind('.jc-w','w'); bind('.jc-h','h'); bind('.jc-copies','copies'); bind('.jc-qty','qty');
+      bind('.jc-rate','rate'); bind('.jc-agreed','agreed');
+      const len = row.querySelector('.jc-len');
+      if(len) len.addEventListener('change', ()=>{ l.len = len.value; updateCalcLine(row, l); calcRefresh(); });
+      const svc = row.querySelector('.jc-service');
+      svc.addEventListener('input', ()=>{
+        l.service = svc.value;
+        const p = serviceOf(svc.value);
+        if(p){
+          l.rate = p.price;
+          const wantMode = p.chargeBy==='sqft' ? 'size' : 'qty';
+          if(wantMode!==l.mode){
+            // The service decides how it's charged. Switching mode swaps the fields, so the
+            // line is rebuilt — and the cursor put back in the service box it was in.
+            l.mode = wantMode;
+            renderCalcLines(); calcRefresh();
+            const again = document.querySelector(`.jc-line[data-idx="${idx}"] .jc-service`);
+            if(again){ again.focus(); const n = again.value.length; try{ again.setSelectionRange(n,n); }catch(e){} }
+            return;
+          }
+          const rateInp = row.querySelector('.jc-rate');
+          if(rateInp) rateInp.value = p.price;
+        }
+        updateCalcLine(row, l);
+        calcRefresh();
+      });
+      row.querySelectorAll('.jc-mode-btn').forEach(b=>b.addEventListener('click', ()=>{
+        if(l.mode===b.dataset.mode) return;
+        l.mode = b.dataset.mode;
+        renderCalcLines(); calcRefresh();
+      }));
+      row.querySelector('.jc-remove').addEventListener('click', ()=>{
+        if(calcSheet.lines.length>1) calcSheet.lines.splice(idx,1);
+        else calcSheet.lines[0] = newCalcLine();
+        renderCalcLines(); calcRefresh();
+      });
+      updateCalcLine(row, l);
+    });
+  }
+  function updateCalcLine(row, l){
+    const fig = calcLineFigures(l);
+    const per = l.mode==='size' ? '/sq ft' : '/unit';
+    row.querySelector('.jc-amt').textContent = naira(fig.amount);
+    row.querySelector('.jc-spec').textContent = fig.units>0 ? calcLineSpec(l, fig) + ' → ' + naira(fig.amount) : '';
+    const bits = [];
+    if(fig.list>0) bits.push(`List ${naira(fig.list)}${per}`);
+    if(fig.tier) bits.push(`<span class="jc-good">Bulk ${fig.tier.off}% off (${fig.tier.from}+) → ${naira(fig.bulk)}${per}</span>`
+      + (fig.clamped ? ' <span class="jc-warn">held at the last price</span>' : ''));
+    else if(fig.units>0 && fig.list>0){
+      const next = tiersOf(fig.p).find(t=>t.from>fig.units);
+      if(next) bits.push(`<span class="muted">${next.off}% off from ${next.from}</span>`);
+    }
+    if(fig.last>0) bits.push(`Last price <b>${naira(fig.last)}</b>${per}`);
+    if(fig.days>0) bits.push(`${fig.days} working day${fig.days===1?'':'s'}`);
+    const warn = fig.belowLast
+      ? `<div class="jc-warn">${naira(fig.unitRate)}${per} is below the last price of ${naira(fig.last)}${per}: this line loses money or misses the minimum margin.</div>`
+      : fig.listBelowLast
+        ? `<div class="jc-warn">The listed price is below what this service costs plus its minimum margin (${naira(fig.last)}${per}). Worth raising it on the Price List.</div>`
+        : '';
+    const noProfile = l.service.trim() && !fig.p
+      ? `<span class="muted">Not on the Price List, so no costing, bulk discount or last price.</span>`
+      : (fig.p && !hasCosting(fig.p) ? `<span class="muted">No costing set for ${esc(fig.p.name)} yet. Add it on the Price List.</span>` : '');
+    row.querySelector('.jc-pricing').innerHTML = (bits.length ? bits.join(' · ') : '') + (noProfile ? (bits.length?' · ':'') + noProfile : '') + warn;
+  }
+
+  function renderCalcMaterials(){
+    const wrap = document.getElementById('jc-materials');
+    const src = document.getElementById('jc-mat-source');
+    if(!wrap) return;
+    if(src) src.innerHTML = calcSheet.materialsEdited
+      ? `— edited by hand. <button type="button" class="subtle-link" id="jc-mat-reset">Reset to recipes</button>`
+      : `— worked out from the recipes on the Price List. Change anything and it stops following them.`;
+    const reset = document.getElementById('jc-mat-reset');
+    if(reset) reset.addEventListener('click', ()=>{ calcSheet.materialsEdited = false; calcSheet.materials = []; calcRefresh(); });
+    if(!calcSheet.materials.length){
+      wrap.innerHTML = `<div style="font-size:12px;color:var(--muted);padding:6px 0;">${calcSheet.materialsEdited
+        ? 'No materials.'
+        : 'None yet. Pick a service that has a recipe, or add a material by hand.'}</div>`;
+      return;
+    }
+    wrap.innerHTML = calcSheet.materials.map((m,idx)=>{
+      const known = state.materials.find(mm=>normName(mm.name)===normName(m.name));
+      return `
+      <div class="material-row" data-idx="${idx}">
+        <div><label style="margin-top:0">Material</label><input class="jm-name" list="jc-material-list" value="${esc(m.name)}" placeholder="e.g. FLEX, SAV, A4"></div>
+        <div><label style="margin-top:0">Qty used${known&&known.unit?' ('+esc(known.unit)+')':''}</label><input class="jm-qty" type="number" min="0" step="any" value="${m.qty}"></div>
+        <div><label style="margin-top:0">Qty wasted</label><input class="jm-waste" type="number" min="0" step="any" value="${m.waste||0}"></div>
+        <div><label style="margin-top:0">Unit cost (₦)</label><input class="jm-cost" type="number" min="0" step="any" value="${m.unitCost}"></div>
+        <div><label style="margin-top:0">Total</label><div class="jc-amt jm-total">${naira(((Number(m.qty)||0)+(Number(m.waste)||0))*(Number(m.unitCost)||0))}</div></div>
+        <div><button class="lg-btn danger small jm-remove" type="button" title="Remove">✕</button></div>
+      </div>`;
+    }).join('');
+    wrap.querySelectorAll('.material-row').forEach(row=>{
+      const idx = Number(row.dataset.idx);
+      const m = calcSheet.materials[idx];
+      const total = ()=>{ row.querySelector('.jm-total').textContent = naira(((Number(m.qty)||0)+(Number(m.waste)||0))*(Number(m.unitCost)||0)); };
+      // Waste alone doesn't take the sheet off the recipes: the recipe says what a job uses,
+      // never what gets spoiled, so the two are independent.
+      const bind = (sel, key, editsRecipe)=>{
+        const el = row.querySelector(sel);
+        el.addEventListener('input', ()=>{
+          m[key] = el.value;
+          if(editsRecipe && !calcSheet.materialsEdited){ calcSheet.materialsEdited = true; renderCalcMaterialSource(); }
+          total(); renderCalcResult();
+        });
+      };
+      bind('.jm-qty','qty',true); bind('.jm-waste','waste',false); bind('.jm-cost','unitCost',true);
+      const nameInp = row.querySelector('.jm-name');
+      nameInp.addEventListener('input', ()=>{
+        m.name = nameInp.value;
+        if(!calcSheet.materialsEdited){ calcSheet.materialsEdited = true; renderCalcMaterialSource(); }
+        const known = state.materials.find(mm=>normName(mm.name)===normName(nameInp.value));
+        if(known){ m.unitCost = Number(known.unitCost)||0; row.querySelector('.jm-cost').value = m.unitCost; }
+        total(); renderCalcResult();
+      });
+      row.querySelector('.jm-remove').addEventListener('click', ()=>{
+        calcSheet.materialsEdited = true;
+        calcSheet.materials.splice(idx,1);
+        renderCalcMaterials(); renderCalcResult();
+      });
+    });
+  }
+  // Just the "from recipes / edited" note — flipping it must not rebuild the row being typed in.
+  function renderCalcMaterialSource(){
+    const src = document.getElementById('jc-mat-source');
+    if(!src) return;
+    src.innerHTML = `— edited by hand. <button type="button" class="subtle-link" id="jc-mat-reset">Reset to recipes</button>`;
+    document.getElementById('jc-mat-reset').addEventListener('click', ()=>{ calcSheet.materialsEdited = false; calcSheet.materials = []; calcRefresh(); });
+  }
+
+  function renderCalcResult(){
+    const el = document.getElementById('jc-result');
+    if(!el) return;
+    const t = calcTotals();
+    const loss = t.profit < 0;
+    const marginTxt = t.margin==null ? '—' : (Math.round(t.margin*10)/10) + '%';
+    const readyBy = t.days>0 ? addWorkDays(todayISO(), t.days) : '';
+    const underLast = t.lastJob>0 && t.price>0 && t.price < t.lastJob;
+    el.innerHTML = `
+      <div class="lg-card-title">Result</div>
+      <div class="lg-grid cols-4">
+        <div class="lg-kpi teal"><div class="lbl">Price to customer</div><div class="num">${naira(t.price)}</div></div>
+        <div class="lg-kpi"><div class="lbl">Total cost</div><div class="num">${naira(t.cost)}</div></div>
+        <div class="lg-kpi ${loss?'debt':'paid'}"><div class="lbl">${loss?'Loss':'Profit'}</div><div class="num" style="color:var(${loss?'--clay':'--green'})">${loss?'−':''}${naira(Math.abs(t.profit))}</div></div>
+        <div class="lg-kpi ${loss?'debt':'paid'}"><div class="lbl">Margin</div><div class="num">${marginTxt}</div></div>
+      </div>
+      <div class="lg-grid cols-3" style="margin-top:14px;">
+        <div class="lg-kpi ${underLast?'debt':''}"><div class="lbl">Last price for this job</div><div class="num" style="font-size:18px;">${t.lastJob>0?naira(t.lastJob):'—'}</div></div>
+        <div class="lg-kpi paid"><div class="lbl">Bulk discount given</div><div class="num" style="font-size:18px;">${naira(t.bulkOff)}</div></div>
+        <div class="lg-kpi teal"><div class="lbl">Ready by</div><div class="num" style="font-size:18px;">${readyBy?fmtDate(readyBy):'—'}</div></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">
+        ${t.lastJob>0
+          ? `Last price: the lowest to accept. It's this job's cost (${naira(t.cost)}) plus the shop's minimum ${t.minMargin}% margin.`
+            + (t.price>t.lastJob ? ` You can come down <b>${naira(t.price-t.lastJob)}</b> from ${naira(t.price)} before you reach it.` : '')
+          : 'Last price appears once the job has a cost: CP or materials.'}
+        ${t.days>0 ? ` Ready by counts ${t.days} working day${t.days===1?'':'s'} from today${state.settings.targetWorksSundays?'':', skipping Sundays'}.` : ''}
+      </div>
+      ${underLast ? `<div class="jc-warn" style="margin-top:6px;">The price is under the last price: this job misses the minimum margin${loss?' and loses money':''}.</div>` : ''}
+      <table class="jc-break" style="margin-top:14px;"><tbody>
+        ${t.bulkOff>0 ? `<tr><td>Items at list price</td><td class="num-col">${naira(t.listTotal)}</td></tr>
+          <tr><td>Bulk discount / agreed prices</td><td class="num-col" style="color:var(--green)">−${naira(t.bulkOff)}</td></tr>` : ''}
+        <tr><td>Items</td><td class="num-col">${naira(t.subtotal)}</td></tr>
+        ${t.discount>0 ? `<tr><td>Extra discount</td><td class="num-col flag">−${naira(t.discount)}</td></tr>` : ''}
+        <tr><td><b>Price to customer</b></td><td class="num-col"><b>${naira(t.price)}</b></td></tr>
+        <tr><td>Cost of production (CP)</td><td class="num-col">−${naira(t.cp)}</td></tr>
+        <tr><td>Material used</td><td class="num-col">−${naira(t.matUsed)}</td></tr>
+        <tr><td>Material wasted</td><td class="num-col">−${naira(t.matWaste)}</td></tr>
+        <tr><td><b>${loss?'Loss':'Profit'}</b></td><td class="num-col" style="color:var(${loss?'--clay':'--green'})"><b>${loss?'−':''}${naira(Math.abs(t.profit))}</b></td></tr>
+      </tbody></table>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">Worked out the way Net Profit is: price, less CP, material used and material wasted. This is what the job adds to the day's profit once it's fully paid.</div>
+      <div class="jc-target">
+        <label style="margin-top:0">Price needed for a margin of</label>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <input id="jc-target" type="number" min="0" max="99" step="any" value="${esc(calcSheet.target)}" placeholder="e.g. 40" style="width:110px;"> <span>%</span>
+          <span id="jc-needed" style="font-weight:600;"></span>
+        </div>
+      </div>
+    `;
+    const tInp = document.getElementById('jc-target');
+    const paintNeeded = ()=>{
+      const tt = calcTotals();
+      const out = document.getElementById('jc-needed');
+      if(tt.needed==null){ out.textContent = ''; return; }
+      const gap = tt.needed - tt.price;
+      out.innerHTML = `→ ${naira(Math.ceil(tt.needed))} `
+        + (Math.abs(gap) < 1 ? '<span style="color:var(--green)">(what you have)</span>'
+          : gap>0 ? `<span style="color:var(--amber)">(${naira(Math.ceil(gap))} more than now)</span>`
+                  : `<span style="color:var(--green)">(you're ${naira(Math.floor(-gap))} above it)</span>`);
+    };
+    // Only the target's own read-out repaints while it's typed in, so the box keeps focus.
+    tInp.addEventListener('input', ()=>{ calcSheet.target = tInp.value; paintNeeded(); });
+    paintNeeded();
+  }
+
+  // How it's done: each service's steps, and how long each line takes, in the order the
+  // lines are on the sheet. A service that appears twice lists its steps once.
+  function renderCalcHowTo(){
+    const el = document.getElementById('jc-howto');
+    if(!el) return;
+    const seen = new Set();
+    const blocks = [];
+    calcSheet.lines.forEach(l=>{
+      const fig = calcLineFigures(l);
+      if(!fig.p || fig.units<=0) return;
+      const key = normName(fig.p.name);
+      const steps = stepsOf(fig.p);
+      const time = fig.days>0 ? `${fig.days} working day${fig.days===1?'':'s'} for ${fig.units} ${l.mode==='size'?'sq ft':(fig.p.unit||'units')}` : 'no time set';
+      if(seen.has(key)){ blocks.push(`<div class="jc-howto-svc"><b>${esc(fig.p.name)}</b> <span class="muted">(again) · ${time}</span></div>`); return; }
+      seen.add(key);
+      blocks.push(`<div class="jc-howto-svc"><b>${esc(fig.p.name)}</b> <span class="muted">· ${time}</span>
+        ${steps.length ? `<ol>${steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol>`
+                       : `<div class="muted" style="font-size:11px;margin:2px 0 6px;">No steps set. Add them under Costing &amp; delivery on the Price List.</div>`}
+      </div>`);
+    });
+    el.innerHTML = `<div class="lg-card-title">How it's done</div>`
+      + (blocks.length ? blocks.join('') : `<div style="font-size:12px;color:var(--muted);">Pick a service from the Price List to see its steps and time.</div>`);
+  }
+
+  function sendCalcToNewJob(){
+    const items = [];
+    calcSheet.lines.forEach(l=>{
+      const fig = calcLineFigures(l);
+      if(fig.units<=0) return;
+      const service = (l.service||'').trim();
+      const listed = fig.p;
+      const spec = calcLineSpec(l, fig);
+      // Saving a job writes each item's unit price back to the Price List as the new standard.
+      // A bulk or agreed price must not overwrite the listed price — so when they differ, the
+      // line rides as New Job's "custom pricing" instead, and the listed price is left exactly
+      // as it was.
+      if(listed && Number(listed.price)!==fig.unitRate){
+        items.push({service, category: listed.category||'', qty:0, unit: listed.unit||'', unitPrice: Number(listed.price)||0,
+          desc: spec, descQty: fig.units, descUnit: fig.unitLabel || listed.unit || '', descUnitPrice: fig.unitRate});
+      } else {
+        items.push({service, category: listed ? (listed.category||'') : '', qty: fig.units,
+          unit: fig.unitLabel || (listed && listed.unit) || '', unitPrice: fig.unitRate,
+          desc: l.mode==='size' ? spec : '', descQty:0, descUnit:'', descUnitPrice:0});
+      }
+    });
+    if(!items.length){ toast('Nothing to send yet — give a line a size or a quantity'); return; }
+    const inProgress = draftItems.some(it=>(it.service||'').trim() || Number(it.descQty)>0)
+      || draftMaterials.some(m=>(m.name||'').trim());
+    if(inProgress && !confirm('New Job already has items typed in. Replace them with this calculation?')) return;
+    const mats = calcSheet.materials
+      .filter(m=>(m.name||'').trim() && (Number(m.qty)>0 || Number(m.waste)>0))
+      .map(m=>({name:m.name.trim(), qty:Number(m.qty)||0, unitCost:Number(m.unitCost)||0, waste:Number(m.waste)||0}));
+    draftItems = items;
+    draftMaterials = mats.length ? mats : [{name:'',qty:0,unitCost:0,waste:0}];
+    const t = calcTotals();
+    draftExtras = {desc: calcSheet.desc.trim(), discount: t.discount, cp: t.cp, due: t.days>0 ? addWorkDays(todayISO(), t.days) : ''};
+    state.tab = 'newjob';
+    renderAll();
+    toast('Calculation sent — add the customer and payment, then save');
   }
 
   // ---------- JOBS (kanban + table) ----------
@@ -4945,6 +5535,21 @@
         </div>
         <div style="margin-top:10px;"><button class="lg-btn" id="pl-add">Add Service</button></div>
       </div>
+      <div class="lg-card">
+        <div class="lg-card-title">Shop pricing rules</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:8px;">
+          Used by Job Calc for every service that doesn't set its own. <b>Bulk discounts</b>: from a quantity, take a percentage off
+          the list price. <b>Minimum margin</b> sets the <b>last price</b>, the lowest you'll accept: cost × 1 ÷ (1 − margin).
+          A bulk discount never goes below the last price.
+          ${(Array.isArray(state.settings.bulkTiers) || !blankish(state.settings.minMarginPct)) ? '' : '<br><span class="jc-warn" style="font-weight:400;">These are starting figures, not yet saved. Check them and press Save.</span>'}
+        </div>
+        <div class="lg-grid cols-2">
+          <div><label style="margin-top:0">Bulk discounts (from qty : % off)</label><input id="pl-rule-tiers" value="${esc(tiersText(shopTiers()))}" placeholder="e.g. 100:5, 500:10, 1000:15"></div>
+          <div><label style="margin-top:0">Minimum margin %</label><input id="pl-rule-margin" type="number" min="0" max="95" step="any" value="${shopMinMargin()}"></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;" id="pl-rule-read">${tiersHuman(shopTiers())}</div>
+        <div style="margin-top:10px;"><button class="lg-btn ghost" id="pl-rule-save" type="button">Save rules</button></div>
+      </div>
       ${(()=>{
         // Recipes are only worth setting up if they can also repair what is already recorded.
         const missing = state.jobs.filter(j=>!jobMaterialSettled(j));
@@ -4994,6 +5599,23 @@
       toast(`${fixable.length} job${fixable.length===1?'':'s'} costed from recipes — ${naira(cost)} of material`);
       renderPrices();
     });
+    const ruleTiers = document.getElementById('pl-rule-tiers');
+    ruleTiers.addEventListener('input', ()=>{
+      const t = parseTiers(ruleTiers.value);
+      document.getElementById('pl-rule-read').textContent = ruleTiers.value.trim() && !t.length ? 'Write them like 100:5, 500:10' : tiersHuman(t);
+    });
+    document.getElementById('pl-rule-save').addEventListener('click', async ()=>{
+      const txt = ruleTiers.value.trim();
+      const tiers = parseTiers(txt);
+      if(txt && !tiers.length){ toast('Bulk discounts: write them like 100:5, 500:10'); return; }
+      const mm = Number(document.getElementById('pl-rule-margin').value);
+      if(!(mm>=0 && mm<95)){ toast('Minimum margin must be between 0 and 95%'); return; }
+      state.settings.bulkTiers = tiers;
+      state.settings.minMarginPct = mm;
+      await save('settings');
+      toast('Pricing rules saved');
+      renderPrices();
+    });
     document.getElementById('pl-add').addEventListener('click', async ()=>{
       const name = document.getElementById('pl-name').value.trim();
       const price = Number(document.getElementById('pl-price').value)||0;
@@ -5007,6 +5629,47 @@
       renderPrices();
     });
     renderPriceTable();
+  }
+  // Which services have their costing panel open — kept across a save, which redraws the table.
+  const plProfileOpen = new Set();
+  function renderServiceProfile(p){
+    const c = unitCostOf(p);
+    const last = lastPriceOf(p);
+    const per = p.chargeBy==='sqft' ? 'sq ft' : (p.unit||'unit');
+    const steps = stepsOf(p);
+    const summary = hasCosting(p)
+      ? [ c.total>0 ? `costs ${naira(c.total)}/${esc(per)}` : '',
+          last>0 ? `last price ${naira(last)}` : '',
+          Number(p.leadDays)>0 ? `${p.leadDays} day${Number(p.leadDays)===1?'':'s'}` : '',
+          steps.length ? `${steps.length} step${steps.length===1?'':'s'}` : '' ].filter(Boolean).join(' · ')
+      : 'not set: Job Calc can’t cost this yet';
+    const warn = last>0 && Number(p.price)>0 && Number(p.price) < last;
+    return `<details class="pl-profile" data-id="${p.id}" ${plProfileOpen.has(p.id)?'open':''}>
+      <summary>Costing &amp; delivery <span class="muted">— ${summary}</span>${warn?' <span class="jc-warn">price below last price</span>':''}</summary>
+      <div class="lg-grid cols-3" style="margin-top:8px;">
+        <div><label style="margin-top:0">Charged by</label>
+          <select class="pf-charge">
+            <option value="unit" ${p.chargeBy==='sqft'?'':'selected'}>Quantity (per ${esc(p.unit||'unit')})</option>
+            <option value="sqft" ${p.chargeBy==='sqft'?'selected':''}>Size (per sq ft)</option>
+          </select></div>
+        <div><label style="margin-top:0">Cost of production per ${esc(per)} (₦)</label><input class="pf-cp" type="number" min="0" step="any" value="${Number(p.cpPer)||0}"></div>
+        <div><label style="margin-top:0">Minimum margin %</label><input class="pf-margin" type="number" min="0" max="95" step="any" value="${blankish(p.minMargin)?'':esc(p.minMargin)}" placeholder="shop: ${shopMinMargin()}%"></div>
+        <div><label style="margin-top:0">Turnaround (working days)</label><input class="pf-lead" type="number" min="0" step="any" value="${Number(p.leadDays)||0}"></div>
+        <div><label style="margin-top:0">Can produce per day</label><input class="pf-perday" type="number" min="0" step="any" value="${Number(p.perDay)||''}" placeholder="optional, in ${esc(per)}"></div>
+        <div><label style="margin-top:0">Bulk discounts (from qty : % off)</label><input class="pf-tiers" value="${esc(tiersText(p.tiers))}" placeholder="shop: ${esc(tiersText(shopTiers())||'none')}"></div>
+      </div>
+      <label>Steps, one per line</label>
+      <textarea class="pf-steps" placeholder="e.g.&#10;Confirm size and artwork&#10;Print on flex&#10;Trim and eyelet&#10;Quality check">${esc(steps.join('\n'))}</textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
+        <div style="font-size:11px;color:var(--muted);max-width:60ch;">
+          Per ${esc(per)}: CP ${naira(c.cp)} + material ${naira(c.mat)} (from the recipe above) = <b>${naira(c.total)}</b>.
+          ${last>0 ? `With a ${minMarginOf(p)}% minimum margin, the <b>last price is ${naira(last)}</b>, and no bulk discount goes below it.` : 'Set a CP or a recipe to get a last price.'}
+          ${warn ? `<span class="jc-warn">The listed ${naira(p.price)} is under it.</span>` : ''}
+          Bulk: ${tiersHuman(tiersOf(p))}${(Array.isArray(p.tiers)&&p.tiers.length)?'':' (shop default)'}.
+        </div>
+        <button class="lg-btn small pf-save" type="button">Save costing</button>
+      </div>
+    </details>`;
   }
   function renderPriceTable(){
     const wrap = document.getElementById('pl-table');
@@ -5049,6 +5712,7 @@
                 </div>
               </div>`;
             })()}
+            ${renderServiceProfile(p)}
           </td>
         </tr>
       `).join('')}
@@ -5093,6 +5757,33 @@
         await save('pricelist');
         toast(p.name + ' — recipe cleared');
         renderPrices();
+      });
+    });
+    wrap.querySelectorAll('.pl-profile').forEach(d=>{
+      d.addEventListener('toggle', ()=>{ if(d.open) plProfileOpen.add(d.dataset.id); else plProfileOpen.delete(d.dataset.id); });
+    });
+    wrap.querySelectorAll('.pf-save').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const box = btn.closest('.pl-profile');
+        const p = state.pricelist.find(x=>x.id===box.dataset.id);
+        if(!p) return;
+        const val = sel=>box.querySelector(sel).value;
+        const tierTxt = val('.pf-tiers').trim();
+        const tiers = parseTiers(tierTxt);
+        if(tierTxt && !tiers.length){ toast('Bulk discounts: write them like 100:5, 500:10'); return; }
+        const mm = val('.pf-margin').trim();
+        if(mm!=='' && !(Number(mm)>=0 && Number(mm)<95)){ toast('Minimum margin must be between 0 and 95%'); return; }
+        p.chargeBy = val('.pf-charge');
+        p.cpPer = Number(val('.pf-cp'))||0;
+        p.leadDays = Number(val('.pf-lead'))||0;
+        p.perDay = Number(val('.pf-perday'))||0;
+        p.tiers = tiers;
+        p.minMargin = mm==='' ? '' : Number(mm);
+        p.steps = val('.pf-steps').split('\n').map(s=>s.trim()).filter(Boolean);
+        plProfileOpen.add(p.id);   // the redraw below must land with this panel still open
+        await save('pricelist');
+        toast(p.name + ' — costing saved');
+        renderPriceTable();
       });
     });
     wrap.querySelectorAll('.pl-save').forEach(btn=>{

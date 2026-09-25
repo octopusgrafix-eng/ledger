@@ -249,6 +249,33 @@ with Daily View's job-payments figure; that's fixed by the same change.
 what you billed this month, how much has been collected on those jobs", which is
 what pairs with `debt`. The Dashboard card is now labelled to say so.
 
+## Service costing and the Job Calc tab
+
+Each Price List entry can carry a costing profile, edited under *Costing & delivery*
+beneath its recipe: `chargeBy` (`'unit'`|`'sqft'`), `cpPer`, `leadDays`, `perDay`,
+`steps[]`, `tiers[]` (`{from, off}` = from that qty, % off) and `minMargin`. All
+per unit of the service, the same basis as the recipe. `tiers`/`minMargin` fall back
+to `settings.bulkTiers`/`settings.minMarginPct`, and those fall back to the
+`DEFAULT_BULK_TIERS`/`DEFAULT_MIN_MARGIN` constants **without writing anything** —
+the Price List's *Shop pricing rules* card says so until the owner saves.
+
+**Last price** = (CP + recipe material per unit) ÷ (1 − min margin), rounded up. A bulk
+tier never takes a price below it (`clamped`). The Result card's job-level last price
+uses the sheet's actual costs (edited CP, waste included) and the shop margin. Time =
+`max(leadDays, ceil(units/perDay))` per line, the job takes the longest line, counted
+in working days (Sundays skipped unless `targetWorksSundays`).
+
+Job Calc never touches the books. It lives in memory (`calcSheet`) and leaves only
+via *Send to New Job*, which fills `draftItems`, `draftMaterials` and `draftExtras`
+(desc/discount/CP/due, consumed once by `renderNewJob`). CP and materials follow the
+services until typed over (`cpEdited`, `materialsEdited`), each with a reset link.
+
+The trap: **saving a job writes each item's `unitPrice` back to the Price List**
+(`upsertPriceListFromJob`). A per-sq-ft rate or bulk price would silently overwrite a
+listed price, so a line whose rate differs from the listed price is sent as New Job's
+*custom pricing* (`descQty`/`descUnitPrice`) with the listed price left in `unitPrice`.
+Keep that if you touch `sendCalcToNewJob()`.
+
 ## Conventions that have held
 
 Semantic colours are load-bearing: clay = debt, green = paid, amber = warning.
@@ -294,6 +321,11 @@ the harness skips — clicking them does nothing there. Expose the handlers on
 `window.firebase` with a fake `currentUser` and an `EmailAuthProvider.credential`
 that only accepts a chosen literal; it reads `window.firebase` at call time, so
 the stub can be swapped in and out around a single call.
+
+**`index.html` is now too big for the preview pane as a `file://` URL** (it refuses
+anything over roughly 512KB with "the file may be missing"). Serve the folder instead:
+a PowerShell `HttpListener` on localhost started through `.claude/launch.json` works,
+and there's no Node or Python on this machine.
 
 ## Testing the staff app without the owner's password
 
