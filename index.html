@@ -2403,6 +2403,7 @@
             // Same rule as the day sheet: cash in less cash out, where stock bought on credit
             // costs nothing until it is paid for and borrowed money arriving is cash in.
             netCash: paid + periodLoansIn - monthExpenseTotal - periodStockCashOut,
+            loansIn: periodLoansIn, stockCashOut: periodStockCashOut,
             owedToOthers: payablesOutstanding(),
             todayBilled: today.billed, todayJobIncome: today.jobIncome, todayPaid: today.paid,
             oldDebtPaidToday: today.oldDebtPaid, oldDebtPaidMonth: oldPaidMonth,
@@ -2802,22 +2803,22 @@
         <div class="lg-card lg-kpi" style="border-left-color:var(--ink);"><div class="num">${dashDrill('grand', m.todayPaid, m.todayPaid>0)}</div><div class="lbl">Grand Total</div></div>
       </div>
       <div class="lg-grid cols-4">
-        <div class="lg-card lg-kpi teal"><div class="num">${naira(m.billed)}</div><div class="lbl">Billed This Month</div></div>
-        <div class="lg-card lg-kpi debt"><div class="num">${naira(m.outstanding)}</div><div class="lbl">Debt Outstanding${m.outstandingOld>0?` <span style="font-weight:400;">(${naira(m.outstandingOld)} is old debt)</span>`:''}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600">${(m.collectionRate*100).toFixed(1)}%</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">of what you billed this month, paid so far</div></div>
+        <div class="lg-card lg-kpi teal"><div class="num">${sumDrill('billed', m.billed)}</div><div class="lbl">Billed This Month</div></div>
+        <div class="lg-card lg-kpi debt"><div class="num">${sumDrill('outstanding', m.outstanding)}</div><div class="lbl">Debt Outstanding${m.outstandingOld>0?` <span style="font-weight:400;">(${naira(m.outstandingOld)} is old debt)</span>`:''}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Collection Rate</div><div style="font-size:20px;font-weight:600"><button class="kpi-drill sum-drill" data-sum="periodjobs" title="See the jobs behind this rate">${(m.collectionRate*100).toFixed(1)}%</button></div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">of what you billed this month, paid so far</div></div>
         <div class="lg-card"><div class="lg-card-title">Net Profit (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('net', m.profit)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">same figure as the Summary month total</div></div>
       </div>
       <div class="lg-grid cols-4">
-        <div class="lg-card"><div class="lg-card-title">Jobs This Month</div><div style="font-size:20px;font-weight:600">${m.jobCount}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Old Debt Paid This Month</div><div style="font-size:20px;font-weight:600;${m.oldDebtPaidMonth>0?'color:var(--teal);':''}">${naira(m.oldDebtPaidMonth)}</div></div>
+        <div class="lg-card"><div class="lg-card-title">Jobs This Month</div><div style="font-size:20px;font-weight:600"><button class="kpi-drill sum-drill" data-sum="periodjobs" title="See every job taken in">${m.jobCount}</button></div></div>
+        <div class="lg-card"><div class="lg-card-title">Old Debt Paid This Month</div><div style="font-size:20px;font-weight:600;${m.oldDebtPaidMonth>0?'color:var(--teal);':''}">${sumDrill('oldDebtPaid', m.oldDebtPaidMonth)}</div></div>
         <div class="lg-card"><div class="lg-card-title">Cost of Production (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('cp', m.cp)}</div></div>
         <div class="lg-card"><div class="lg-card-title">Material Cost — Bought (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('matBought', m.matCost)}</div><div style="font-size:10.5px;margin-top:2px;"><a href="#" class="goto-purchase-log" style="color:var(--teal);">view Purchase Log \u2192</a></div></div>
       </div>
       <div class="lg-grid cols-3">
         <div class="lg-card"><div class="lg-card-title">Material Cost — Used (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('matUsed', m.matCostUsed)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">this is what comes out of Net Profit</div></div>
-        <div class="lg-card"><div class="lg-card-title">Material Cost — Wasted (Month)</div><div style="font-size:20px;font-weight:600;${m.matWasteCost>0?'color:var(--clay);':''}">${naira(m.matWasteCost)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">spoiled/wasted material, also comes out of Net Profit</div></div>
+        <div class="lg-card"><div class="lg-card-title">Material Cost — Wasted (Month)</div><div style="font-size:20px;font-weight:600;${m.matWasteCost>0?'color:var(--clay);':''}">${sumDrill('matWaste', m.matWasteCost)}</div><div style="font-size:10.5px;margin-top:2px;color:var(--muted);">spoiled/wasted material, also comes out of Net Profit</div></div>
         <div class="lg-card"><div class="lg-card-title">Expenses (Month)</div><div style="font-size:20px;font-weight:600">${sumDrill('expenses', m.monthExpenseTotal)}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Net Cash (Month, after expenses &amp; stock buys)</div><div style="font-size:20px;font-weight:600">${naira(m.netCash)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(m.paid)} in − ${naira(m.monthExpenseTotal)} expenses − ${naira(m.matCost)} stock bought</div></div>
+        <div class="lg-card"><div class="lg-card-title">Net Cash (Month, after expenses &amp; stock buys)</div><div style="font-size:20px;font-weight:600">${sumDrill('netcash', m.netCash)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(m.paid)} in${m.loansIn>0?` + ${naira(m.loansIn)} borrowed`:''} − ${naira(m.monthExpenseTotal)} expenses − ${naira(m.stockCashOut)} stock paid in cash</div></div>
       </div>
       <div class="lg-card">
         <div class="lg-card-title">Jobs by Stage</div>
@@ -2922,6 +2923,7 @@
     one:   ['billed','income','olddebt','grand'],
     two:   ['newdebt','cp','matbought','matused','matwasted'],
     three: ['expenses','netprofit','netcash'],
+    four:  ['pf','ex','tithe'],
   };
   function dayPanelFor(row, d){
     if(!dayOpenCard || DAY_PANEL_ROWS[row].indexOf(dayOpenCard) === -1) return '';
@@ -3081,9 +3083,12 @@
            ['Cost of production', -d.cp, '−', 'cp'],
            ['Material used', -d.matCostUsed, '−', 'matused'],
            ['Material wasted', -d.matWasteCost, '−', 'matwasted']]
+        // The same four parts dayStats() builds netCash from — stock bought on credit takes no
+        // cash, so it is what was actually handed over that counts, not the purchase value.
         : [['Money collected today', d.paid, '+', 'grand'],
+           ['Money borrowed in', d.loansIn, '+', null],
            ['Expenses', -d.expenseTotal, '−', 'expenses'],
-           ['Stock bought', -d.matCost, '−', 'matbought']];
+           ['Stock paid for in cash', -d.stockCashOut, '−', 'matbought']];
       const raw = lines.reduce((s,l)=>s+l[1], 0);
       const shown = profit ? d.netProfit : d.netCash;
       return dayPanel(`How the ${naira(shown)} ${profit?'net profit':'net cash'} was worked out — ${day}`,
@@ -3109,6 +3114,29 @@
          ${profit ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;">
            Split off this: PF ${naira(d.pf)} · EX ${naira(d.ex)}.</div>` : ''}`,
         profit?'var(--green)':'var(--ok-blue)');
+    }
+    // PF / EX (and Tithe, when it's set) are each a percentage of the day's Net Profit.
+    if(key === 'pf' || key === 'ex' || key === 'tithe'){
+      const s = state.settings;
+      const parts = [['PF', s.pfPct, d.pf, 'pf'], ['EX', s.exPct, d.ex, 'ex']];
+      if(Number(s.tithePct)>0) parts.unshift(['Tithe', s.tithePct, d.tithe, 'tithe']);
+      const name = {pf:'PF', ex:'EX', tithe:'Tithe'}[key];
+      const shown = key==='pf' ? d.pf : key==='ex' ? d.ex : d.tithe;
+      return dayPanel(`How the ${naira(shown)} ${name} was worked out — ${day}`,
+        `<div style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+           Each share is a fixed percentage of the day's Net Profit. A day with no profit splits nothing.
+           The percentages are set on the Summary tab.
+         </div>
+         <div style="overflow-x:auto;"><table><tbody>
+           <tr><td><button class="subtle-link dv-drill" data-key="netprofit">Net Profit</button></td><td class="num-col">${naira(d.netProfit)}</td><td></td></tr>
+           ${parts.map(p=>`<tr${p[3]===key?' style="font-weight:700;"':''}>
+             <td>${p[0]} share</td>
+             <td class="num-col muted">× ${Number(p[1])||0}%</td>
+             <td class="num-col">${naira(p[2])}</td>
+           </tr>`).join('')}
+         </tbody></table></div>
+         ${key==='pf' ? `<div style="font-size:11px;margin-top:8px;"><a href="#" class="goto-profit" data-date="${dayViewDate}" style="color:var(--teal);">See the PF purse on the Profit tab →</a></div>` : ''}`,
+        'var(--teal)');
     }
     return '';
   }
@@ -3197,13 +3225,14 @@
       <div class="lg-grid cols-4">
         <div class="lg-card"><div class="lg-card-title">Expenses</div><div style="font-size:18px;font-weight:600">${drill('expenses', d.expenseTotal, d.expensesToday.length>0)}</div></div>
         <div class="lg-card"><div class="lg-card-title">Net Profit</div><div style="font-size:18px;font-weight:600">${drill('netprofit', d.netProfit, true)}</div></div>
-        <div class="lg-card"><div class="lg-card-title">Net Cash (after expenses &amp; stock buys)</div><div style="font-size:18px;font-weight:600">${drill('netcash', d.netCash, true)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(d.paid)} in − ${naira(d.expenseTotal)} expenses − ${naira(d.matCost)} stock bought</div></div>
+        <div class="lg-card"><div class="lg-card-title">Net Cash (after expenses &amp; stock buys)</div><div style="font-size:18px;font-weight:600">${drill('netcash', d.netCash, true)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px;">${naira(d.paid)} in${d.loansIn>0?` + ${naira(d.loansIn)} borrowed`:''} − ${naira(d.expenseTotal)} expenses − ${naira(d.stockCashOut)} stock paid in cash</div></div>
       </div>
       ${dayPanelFor('three', d)}
       <div class="lg-card">
         <div class="lg-card-title">Split \u2014 PF (${state.settings.pfPct}%) / EX (${state.settings.exPct}%)</div>
-        <div style="font-size:16px;font-weight:600;">${naira(d.pf)} &nbsp;/&nbsp; ${naira(d.ex)}</div>
+        <div style="font-size:16px;font-weight:600;">${drill('pf', d.pf, d.pf>0)} &nbsp;/&nbsp; ${drill('ex', d.ex, d.ex>0)}${Number(state.settings.tithePct)>0 ? ` &nbsp;·&nbsp; Tithe ${drill('tithe', d.tithe, d.tithe>0)}` : ''}</div>
       </div>
+      ${dayPanelFor('four', d)}
 
       <div class="lg-card">
         <div class="lg-card-title">Jobs Received on ${fmtDate(dayViewDate)} (${d.jobsToday.length})</div>
@@ -6889,6 +6918,7 @@
     matWaste: {label:'Material wasted',     note:'spoiled stock, which comes out of profit exactly like material used'},
     matBought:{label:'Stock bought',        note:'keyed to the day of purchase — it does not reduce Net Profit'},
     expenses: {label:'Expenses',            note:'keyed to the day the cash left'},
+    oldDebtPaid:{label:'Old debt paid',     note:'payments against debt carried in from before the ledger, keyed to the day the money arrived'},
     net:      {label:'Net Profit',          note:'collected less cost of production, material used and material wasted, floored at zero each day'},
   };
   // Marks a total as openable. The key says which explanation to run; the click is picked up
@@ -6945,6 +6975,72 @@
         : 'Buying stock is not in this. Restocking is paid from the material purse, not out of profit.'
     );
   }
+  // The Dashboard figures that are neither a day-sum nor a purse. Each is built from the same
+  // expression monthStats() uses, so the TOTAL line always equals the card that was pressed.
+  //
+  // Debt outstanding is every customer's, of all time, not just this period's — one row per
+  // customer, job debt and pre-ledger debt side by side, biggest first.
+  function explainOutstanding(){
+    recomputeAllCustomers();
+    const by = new Map();
+    const row = name => {
+      const k = normName(name);
+      if(!by.has(k)) by.set(k, {name: name||'—', jobs:0, jobDebt:0, oldDebt:0});
+      return by.get(k);
+    };
+    state.jobs.forEach(j=>{
+      const d = jobTotals(j).debt;
+      if(d > 0.0001){ const r = row(j.customerName); r.jobDebt += d; r.jobs++; }
+    });
+    state.customers.forEach(c=>{
+      const o = Math.max(c.openingDebtRemaining||0, 0);
+      if(o > 0.0001) row(c.name).oldDebt += o;
+    });
+    const list = Array.from(by.values()).sort((a,b)=>(b.jobDebt+b.oldDebt)-(a.jobDebt+a.oldDebt));
+    const total = list.reduce((s,r)=>s+r.jobDebt+r.oldDebt, 0);
+    openExplain('Debt outstanding — who owes it',
+      `${list.length} customer${list.length===1?'':'s'} owe money · all time, not just this period`,
+      [{label:'Customer'},{label:'Jobs',num:true},{label:'On jobs',num:true},{label:'Old debt',num:true},{label:'Total',num:true}],
+      list.map(r=>[esc(r.name), r.jobs||'—', r.jobDebt?naira(r.jobDebt):'—', r.oldDebt?naira(r.oldDebt):'—', `<b>${naira(r.jobDebt+r.oldDebt)}</b>`]),
+      'TOTAL OWED', naira(total),
+      'Old debt is what a customer owed before their jobs were in the ledger. Settle any of it from the Customers tab.'
+    );
+  }
+  // Collection rate and Jobs This Month are the same list: the jobs taken in this period, with
+  // what each billed and what has been paid on it since.
+  function explainPeriodJobs(bk, titlePrefix){
+    const jobs = state.jobs.filter(j=>!!bk.days[j.dateReceived||''])
+      .map(j=>({j, t:jobTotals(j)}))
+      .sort((a,b)=>(a.j.dateReceived||'').localeCompare(b.j.dateReceived||'') || b.t.totalBilled-a.t.totalBilled);
+    const billed = jobs.reduce((s,x)=>s+x.t.totalBilled, 0);
+    const paid = jobs.reduce((s,x)=>s+x.t.totalPaid, 0);
+    const rate = billed ? paid/billed*100 : 0;
+    openExplain(`${titlePrefix} — Jobs and collection`,
+      `${jobs.length} job${jobs.length===1?'':'s'} taken in, ${fmtDate(bk.from)} to ${fmtDate(bk.to)}`,
+      [{label:'Date'},{label:'Customer'},{label:'Billed',num:true},{label:'Paid',num:true},{label:'Owing',num:true}],
+      jobs.map(({j,t})=>[fmtDate(j.dateReceived), esc(j.customerName||'—'), naira(t.totalBilled), naira(t.totalPaid),
+        t.debt>0.0001 ? `<span class="flag">${naira(t.debt)}</span>` : '—']),
+      'COLLECTED', `${naira(paid)} of ${naira(billed)} · ${rate.toFixed(1)}%`,
+      'Collection rate is what has been paid on these jobs, whenever it came in, divided by what they billed. It is a different basis from the cash collected this period, which also counts payments on older jobs.'
+    );
+  }
+  function explainNetCash(bk, titlePrefix){
+    const paid = bk.list.reduce((s,b)=>s+(b.paid||0), 0);
+    const loans = bk.list.reduce((s,b)=>s+loansInOnDate(b.date), 0);
+    const exp = bk.list.reduce((s,b)=>s+(b.expenses||0), 0);
+    const stock = stockCashOutInRange(bk.from, bk.to);
+    openExplain(`${titlePrefix} — Net Cash`,
+      `${fmtDate(bk.from)} to ${fmtDate(bk.to)}`,
+      [{label:'Part'},{label:'Amount',num:true}],
+      [['Collected', naira(paid)],
+       ['+ Money borrowed in', naira(loans)],
+       ['− Expenses', naira(exp)],
+       ['− Stock paid for in cash', naira(stock)]],
+      'NET CASH', naira(paid + loans - exp - stock),
+      'Cash movement, not profit. Stock bought on credit costs nothing here until it is paid for, and loan repayments are already inside expenses.'
+    );
+  }
+
   // Shape two: a purse balance. Carried-in is the sum of every earlier day's in and out, which
   // is exactly the thing nobody can reconstruct by eye.
   function explainPurse(purse, dateStr){
@@ -9248,6 +9344,9 @@
         const bk = periodDailyBuckets(pi);
         const label = periodLabel(pi);
         if(key === 'net') return explainNetProfit(bk, label);
+        if(key === 'outstanding') return explainOutstanding();
+        if(key === 'periodjobs') return explainPeriodJobs(bk, label);
+        if(key === 'netcash') return explainNetCash(bk, label);
         if(key === 'pf' || key === 'ex') return explainShare(key, bk, label);
         if(DAY_SUM_FIELDS[key]) return explainDaySum(key, bk, label);
       }
@@ -9264,6 +9363,12 @@
         e.preventDefault();
         if(e.target.dataset.date) cpViewDate = e.target.dataset.date;
         state.tab = 'cpaccount';
+        renderAll();
+      }
+      if(e.target.classList && e.target.classList.contains('goto-profit')){
+        e.preventDefault();
+        if(e.target.dataset.date) pfViewDate = e.target.dataset.date;
+        state.tab = 'profit';
         renderAll();
       }
     });
